@@ -13,10 +13,14 @@ use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 
 mod auth;
+mod models;
+mod schema;
+mod upload;
+
 use auth::*;
 
 #[derive(Clone)]
-struct AppState {
+pub struct AppState {
     pub db: r2d2::Pool<ConnectionManager<PgConnection>>,
 }
 
@@ -115,6 +119,11 @@ async fn main() {
         .route("/api/hello", get(hello))
         .route("/api/auth/login", post(login))
         .route("/api/auth/register", post(register))
+        // 📁 Upload Routes hinzufügen
+        .route("/api/upload", post(upload::upload_file))
+        .route("/api/files", get(upload::list_files))
+        .route("/api/files/:id", get(upload::get_file))
+        .route("/api/files/:id/download", get(upload::download_file))
         .with_state(state)
         .layer(CorsLayer::new().allow_origin(Any));
 
@@ -122,5 +131,6 @@ async fn main() {
 
     println!("🚀 Backend läuft auf http://127.0.0.1:3000");
     println!("🔐 Standard Admin: admin@localhost / admin");
+    println!("📁 Upload API: POST /api/upload");
     axum::serve(listener, app).await.unwrap();
 }

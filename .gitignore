@@ -2,3 +2,4 @@
 /backend/target
 Cargo.lock
 package-lock.json
+/backend/uploads

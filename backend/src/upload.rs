@@ -1,0 +1,236 @@
+use axum::{
+    extract::{Multipart, Path, Query, State},
+    http::StatusCode,
+    response::Json,
+};
+use diesel::prelude::*;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::sync::Arc;
+use tokio::{fs, io::AsyncWriteExt};
+use uuid::Uuid;
+
+use crate::{
+    models::{File, NewFile},
+    schema::files,
+    AppState,
+};
+
+#[derive(Serialize)]
+pub struct UploadResponse {
+    pub id: i32,
+    pub filename: String,
+    pub size: i64,
+    pub url: String,
+}
+
+#[derive(Serialize)]
+pub struct FileListResponse {
+    pub files: Vec<FileInfo>,
+    pub total: i64,
+}
+
+#[derive(Serialize)]
+pub struct FileInfo {
+    pub id: i32,
+    pub original_filename: String,
+    pub file_size: i64,
+    pub mime_type: Option<String>,
+    pub is_public: bool,
+    pub created_at: chrono::NaiveDateTime,
+}
+
+#[derive(Deserialize)]
+pub struct FileQuery {
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
+    pub public_only: Option<bool>,
+}
+
+pub async fn upload_file(
+    State(state): State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> Result<Json<Vec<UploadResponse>>, StatusCode> {
+    let user_id = 1; // TODO: aus Session/JWT
+
+    let mut responses = Vec::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+    {
+        let name = field.name().unwrap_or("").to_string();
+
+        if name == "file" {
+            let filename = field.file_name().unwrap_or("unknown").to_string();
+            let content_type = field
+                .content_type()
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let data = field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+
+            // unique filename generieren
+            let ext = std::path::Path::new(&filename)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            let stored_filename = format!("{}.{}", Uuid::new_v4(), ext);
+            let upload_dir = "uploads";
+            let file_path = format!("{}/{}", upload_dir, stored_filename);
+
+            fs::create_dir_all(upload_dir)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let mut hasher = Sha256::new();
+            hasher.update(&data);
+            let file_hash = format!("{:x}", hasher.finalize());
+
+            let mut file = fs::File::create(&file_path)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            file.write_all(&data)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+            // DB Insert
+            let new_file = NewFile {
+                user_id,
+                original_filename: filename.clone(),
+                stored_filename: stored_filename.clone(),
+                file_path: file_path.clone(),
+                file_size: data.len() as i64,
+                mime_type: Some(content_type),
+                file_hash: Some(file_hash),
+                is_public: false,
+                upload_status: "completed".into(),
+            };
+
+            let mut conn = state
+                .db
+                .get()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let file_record: File = diesel::insert_into(files::table)
+                .values(&new_file)
+                .get_result(&mut conn)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+            responses.push(UploadResponse {
+                id: file_record.id,
+                filename,
+                size: file_record.file_size,
+                url: format!("/api/files/{}/download", file_record.id),
+            });
+        }
+    }
+
+    if responses.is_empty() {
+        Err(StatusCode::BAD_REQUEST)
+    } else {
+        Ok(Json(responses))
+    }
+}
+
+pub async fn list_files(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<FileQuery>,
+) -> Result<Json<FileListResponse>, StatusCode> {
+    // TODO: Extract user_id from JWT token/session
+    let user_id = 1; // Placeholder
+
+    let page = params.page.unwrap_or(1);
+    let limit = params.limit.unwrap_or(20);
+    let offset = (page - 1) * limit;
+
+    let mut conn = state
+        .db
+        .get()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut query = files::table.into_boxed();
+
+    if params.public_only.unwrap_or(false) {
+        query = query.filter(files::is_public.eq(true));
+    } else {
+        query = query.filter(files::user_id.eq(user_id));
+    }
+
+    let files_result: Vec<File> = query
+        .order(files::created_at.desc())
+        .limit(limit)
+        .offset(offset)
+        .load(&mut conn)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let total: i64 = files::table
+        .filter(files::user_id.eq(user_id))
+        .count()
+        .get_result(&mut conn)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let file_infos: Vec<FileInfo> = files_result
+        .into_iter()
+        .map(|f| FileInfo {
+            id: f.id,
+            original_filename: f.original_filename,
+            file_size: f.file_size,
+            mime_type: f.mime_type,
+            is_public: f.is_public,
+            created_at: f.created_at,
+        })
+        .collect();
+
+    Ok(Json(FileListResponse {
+        files: file_infos,
+        total,
+    }))
+}
+
+pub async fn get_file(
+    State(state): State<Arc<AppState>>,
+    Path(file_id): Path<i32>,
+) -> Result<Json<FileInfo>, StatusCode> {
+    let mut conn = state
+        .db
+        .get()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let file: File = files::table
+        .find(file_id)
+        .first(&mut conn)
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    // TODO: Check if user has permission to view this file
+
+    Ok(Json(FileInfo {
+        id: file.id,
+        original_filename: file.original_filename,
+        file_size: file.file_size,
+        mime_type: file.mime_type,
+        is_public: file.is_public,
+        created_at: file.created_at,
+    }))
+}
+
+pub async fn download_file(
+    State(state): State<Arc<AppState>>,
+    Path(file_id): Path<i32>,
+) -> Result<Vec<u8>, StatusCode> {
+    let mut conn = state
+        .db
+        .get()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let file: File = files::table
+        .find(file_id)
+        .first(&mut conn)
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    // TODO: Check if user has permission to download this file
+
+    let file_data = fs::read(&file.file_path)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    Ok(file_data)
+}
