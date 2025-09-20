@@ -31,23 +31,3 @@ CREATE TRIGGER update_users_updated_at
     BEFORE UPDATE ON users 
     FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at_column();
-
--- Standard Admin User erstellen
--- Passwort: "admin" -> bcrypt Hash mit cost 12
-INSERT INTO users (name, email, password_hash, role) 
-VALUES (
-    'Administrator',
-    'admin@localhost',
-    '$2b$12$lrEreK9iCHGuyyzfthqOEuN37npEoSjbqYi72tJIgCSvkUxFa8DgS',
-    'admin'
-);
-
--- Beispiel normaler User (optional)
--- Passwort: "user123" -> bcrypt Hash
-INSERT INTO users (name, email, password_hash, role) 
-VALUES (
-    'Demo User',
-    'user@localhost',
-    '$2b$12$8Ry3VQKWKxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj3bp.Test123',
-    'user'
-);
