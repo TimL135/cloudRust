@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::{
     models::{File, NewFile},
     schema::files,
-    AppState,
+    AppState, AuthenticatedUser,
 };
 
 #[derive(Serialize)]
@@ -134,10 +134,9 @@ pub async fn upload_file(
 pub async fn list_files(
     State(state): State<Arc<AppState>>,
     Query(params): Query<FileQuery>,
+    auth_user: AuthenticatedUser,
 ) -> Result<Json<FileListResponse>, StatusCode> {
-    // TODO: Extract user_id from JWT token/session
-    let user_id = 1; // Placeholder
-
+    let user_id = auth_user.user_id; // Extract from JWT token
     let page = params.page.unwrap_or(1);
     let limit = params.limit.unwrap_or(20);
     let offset = (page - 1) * limit;
@@ -186,35 +185,10 @@ pub async fn list_files(
     }))
 }
 
-pub async fn get_file(
-    State(state): State<Arc<AppState>>,
-    Path(file_id): Path<i32>,
-) -> Result<Json<FileInfo>, StatusCode> {
-    let mut conn = state
-        .db
-        .get()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let file: File = files::table
-        .find(file_id)
-        .first(&mut conn)
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-
-    // TODO: Check if user has permission to view this file
-
-    Ok(Json(FileInfo {
-        id: file.id,
-        original_filename: file.original_filename,
-        file_size: file.file_size,
-        mime_type: file.mime_type,
-        is_public: file.is_public,
-        created_at: file.created_at,
-    }))
-}
-
 pub async fn download_file(
     State(state): State<Arc<AppState>>,
     Path(file_id): Path<i32>,
+    auth_user: AuthenticatedUser,
 ) -> Result<Vec<u8>, StatusCode> {
     let mut conn = state
         .db
@@ -226,7 +200,9 @@ pub async fn download_file(
         .first(&mut conn)
         .map_err(|_| StatusCode::NOT_FOUND)?;
 
-    // TODO: Check if user has permission to download this file
+    if file.user_id != auth_user.user_id && !file.is_public {
+        return Err(StatusCode::FORBIDDEN);
+    }
 
     let file_data = fs::read(&file.file_path)
         .await

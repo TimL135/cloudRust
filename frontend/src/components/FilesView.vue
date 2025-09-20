@@ -50,7 +50,9 @@
 </template>
 
 <script setup lang="ts">
+import { useAuthStore } from "@/stores/auth"
 import { ref, onMounted, computed } from "vue"
+const authStore = useAuthStore()
 
 interface FileInfo {
     id: number
@@ -85,7 +87,7 @@ async function fetchFiles() {
     loading.value = true
     error.value = ""
     try {
-        const res = await fetch("/api/files")
+        const res = await authStore.apiRequest('/api/files')
         if (!res.ok) throw new Error("Fehler beim Laden der Dateien")
         const data = await res.json()
         files.value = data.files

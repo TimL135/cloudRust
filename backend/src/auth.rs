@@ -64,6 +64,7 @@ pub struct RegisterRequest {
 pub struct AuthResponse {
     pub success: bool,
     pub message: String,
+    pub token: Option<String>,
     pub user: Option<UserResponse>,
 }
 
@@ -104,13 +105,13 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, bcrypt::Bcryp
 
 pub fn authenticate_user(
     conn: &mut PgConnection,
-    email: &str,
+    _email: &str,
     password: &str,
 ) -> Result<Option<User>, diesel::result::Error> {
     use self::users::dsl::*;
 
     let user_result = users
-        .filter(email.eq(email))
+        .filter(email.eq(_email))
         .first::<User>(conn)
         .optional()?;
 
@@ -158,45 +159,6 @@ pub fn create_user(
         .get_result::<User>(conn)?;
 
     Ok(user)
-}
-
-pub fn find_user_by_id(
-    conn: &mut PgConnection,
-    user_id: i32,
-) -> Result<Option<User>, diesel::result::Error> {
-    use self::users::dsl::*;
-
-    users.find(user_id).first::<User>(conn).optional()
-}
-
-pub fn find_user_by_email(
-    conn: &mut PgConnection,
-    user_email: &str,
-) -> Result<Option<User>, diesel::result::Error> {
-    use self::users::dsl::*;
-
-    users
-        .filter(email.eq(user_email))
-        .first::<User>(conn)
-        .optional()
-}
-
-pub fn update_user(
-    conn: &mut PgConnection,
-    user_id: i32,
-    user_updates: &User,
-) -> Result<User, diesel::result::Error> {
-    use self::users::dsl::*;
-
-    diesel::update(users.find(user_id))
-        .set(user_updates)
-        .get_result::<User>(conn)
-}
-
-pub fn delete_user(conn: &mut PgConnection, user_id: i32) -> Result<usize, diesel::result::Error> {
-    use self::users::dsl::*;
-
-    diesel::delete(users.find(user_id)).execute(conn)
 }
 
 /// Erstellt automatisch einen Admin, falls keiner vorhanden ist.
