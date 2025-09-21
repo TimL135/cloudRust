@@ -218,3 +218,43 @@ pub async fn download_file(
 
     Ok(file_data)
 }
+
+pub async fn delete_file(
+    State(state): State<Arc<AppState>>,
+    Path(file_id): Path<i32>,
+    auth_user: AuthenticatedUser,
+) -> Result<StatusCode, StatusCode> {
+    let mut conn = state
+        .db
+        .get()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let file: File = files::table
+        .find(file_id)
+        .first(&mut conn)
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    if file.user_id != auth_user.user_id {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Datei aus dem Dateisystem löschen
+    fs::remove_file(&file.file_path)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Datei aus der Datenbank löschen
+    diesel::delete(files::table.find(file_id))
+        .execute(&mut conn)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let clients = state.clients.clone();
+    let lock = clients.lock().await;
+
+    if let Some(senders) = lock.get(&auth_user.user_id) {
+        for tx in senders {
+            let _ = tx.send(Message::Text(format!("delete file").into()));
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}

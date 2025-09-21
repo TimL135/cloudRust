@@ -35,8 +35,34 @@
                             @click="downloadFile(item.id, item.original_filename)">
                             <v-icon>mdi-download</v-icon>
                         </v-btn>
+                          <v-btn icon color="error" variant="text"
+                            @click="showDeleteConfirmation(item)">
+                            <v-icon>mdi-delete</v-icon>
+                        </v-btn>
                     </template>
                 </v-data-table>
+
+                <!-- Bestätigungs-Modal für Löschen -->
+                <v-dialog v-model="deleteDialog" max-width="400">
+                    <v-card>
+                        <v-card-title class="text-h6">
+                            Datei löschen
+                        </v-card-title>
+                        <v-card-text>
+                            Möchten Sie die Datei "{{ selectedFile?.original_filename }}" wirklich löschen?
+                            Diese Aktion kann nicht rückgängig gemacht werden.
+                        </v-card-text>
+                        <v-card-actions>
+                            <v-spacer></v-spacer>
+                            <v-btn color="grey" variant="text" @click="deleteDialog = false">
+                                Abbrechen
+                            </v-btn>
+                            <v-btn color="error" variant="text" @click="confirmDelete">
+                                Löschen
+                            </v-btn>
+                        </v-card-actions>
+                    </v-card>
+                </v-dialog>
             </v-col>
         </v-row>
     </v-card>
@@ -45,6 +71,12 @@
 <script setup lang="ts">
 import { useAuthStore } from "@/stores/auth"
 import { ref, onMounted, computed } from "vue"
+
+interface FileItem {
+  id: number
+  original_filename: string
+}
+
 const authStore = useAuthStore()
 
 interface FileInfo {
@@ -60,6 +92,8 @@ const files = ref<FileInfo[]>([])
 const loading = ref(false)
 const error = ref("")
 const searchQuery = ref("")
+const deleteDialog = ref(false)
+const selectedFile = ref<FileItem | null>(null)
 const filteredFiles = computed(() => {
     if (!searchQuery.value) return files.value
     return files.value.filter(file =>
@@ -118,6 +152,28 @@ async function downloadFile(id: number, filename: string) {
         window.URL.revokeObjectURL(url)
     } catch (e: any) {
         alert(e.message ?? "Download fehlgeschlagen")
+    }
+}
+
+async function deleteFile(id: number) {
+    try {
+        const res = await authStore.apiRequest(`/api/files/${id}/delete`)
+        if (!res.ok) throw new Error("Fehler beim Loschen")
+    } catch (e: any) {
+        alert(e.message ?? "Download fehlgeschlagen")
+    }
+}
+
+const showDeleteConfirmation = (item:FileItem) => {
+    selectedFile.value = item
+    deleteDialog.value = true
+}
+
+const confirmDelete = () => {
+    if (selectedFile.value) {
+        deleteFile(selectedFile.value.id)
+        deleteDialog.value = false
+        selectedFile.value = null
     }
 }
 

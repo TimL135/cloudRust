@@ -259,6 +259,8 @@ async fn main() {
         .with_state(state.clone())
         .route("/api/files", get(upload::list_files))
         .route("/api/files/{id}/download", get(upload::download_file))
+        .with_state(state.clone())
+        .route("/api/files/{id}/delete", get(upload::delete_file))
         .with_state(state)
         .layer(CorsLayer::new().allow_origin(Any));
 
