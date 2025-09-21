@@ -101,7 +101,7 @@ async function fetchFiles() {
 // File Download
 async function downloadFile(id: number, filename: string) {
     try {
-        const res = await fetch(`/api/files/${id}/download`)
+        const res = await authStore.apiRequest(`/api/files/${id}/download`)
         if (!res.ok) throw new Error("Fehler beim Download")
 
         const blob = await res.blob()
