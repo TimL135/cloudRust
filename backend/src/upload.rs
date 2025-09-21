@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Multipart, Path, Query, State},
+    extract::{ws::Message, Multipart, Path, Query, State},
     http::StatusCode,
     response::Json,
 };
@@ -127,6 +127,14 @@ pub async fn upload_file(
     if responses.is_empty() {
         Err(StatusCode::BAD_REQUEST)
     } else {
+        let clients = state.clients.clone();
+        let lock = clients.lock().await;
+
+        if let Some(senders) = lock.get(&user_id) {
+            for tx in senders {
+                let _ = tx.send(Message::Text(format!("new_file").into()));
+            }
+        }
         Ok(Json(responses))
     }
 }

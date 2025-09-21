@@ -1,19 +1,24 @@
 use axum::{
-    async_trait,
-    extract::{FromRequestParts, State},
+    extract::{ws::WebSocket, FromRequestParts, Query, State},
     http::{request::Parts, StatusCode},
-    response::Json,
+    response::{IntoResponse, Json},
     routing::{get, post},
     Router,
 };
 
+use axum::extract::ws::{Message, WebSocketUpgrade};
+
 use chrono::{Duration, Utc};
 use diesel::r2d2::{self, ConnectionManager};
 use diesel::PgConnection;
+use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::net::TcpListener;
+use std::{collections::HashMap, sync::Arc};
+use tokio::{
+    net::TcpListener,
+    sync::{mpsc, Mutex},
+};
 use tower_http::cors::{Any, CorsLayer};
 
 mod auth;
@@ -26,11 +31,7 @@ use auth::*;
 #[derive(Clone)]
 pub struct AppState {
     pub db: r2d2::Pool<ConnectionManager<PgConnection>>,
-}
-
-#[derive(Serialize)]
-struct Message {
-    msg: String,
+    pub clients: Clients,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -41,18 +42,9 @@ pub struct Claims {
 
 pub struct AuthenticatedUser {
     pub user_id: i32,
+    pub role: String,
 }
 
-// 👇 AuthResponse mit token-Feld hinzufügen
-#[derive(Serialize)]
-struct AuthResponse {
-    success: bool,
-    message: String,
-    token: Option<String>, // 👈 Das hat gefehlt!
-    user: Option<UserResponse>,
-}
-
-#[async_trait]
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
@@ -84,9 +76,25 @@ where
             &Validation::new(Algorithm::HS256),
         )
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
+        let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL muss gesetzt sein");
+        let manager = ConnectionManager::<PgConnection>::new(db_url);
+        let pool = r2d2::Pool::builder()
+            .build(manager)
+            .expect("DB Pool konnte nicht erstellt werden");
+        let mut conn = pool.get().expect("Keine Verbindung aus Pool");
 
+        let user_id = token_data.claims.user_id;
+        let user = get_user_by_id(&mut conn, &user_id)
+            .unwrap_or_else(|e| {
+                eprintln!("Error getting user: {}", e);
+                None
+            })
+            .unwrap_or_else(|| {
+                panic!("User not found");
+            });
         Ok(AuthenticatedUser {
-            user_id: token_data.claims.user_id,
+            user_id,
+            role: user.role,
         })
     }
 }
@@ -169,6 +177,61 @@ async fn register(
     }
 }
 
+type UserId = i32;
+type Clients = Arc<Mutex<HashMap<UserId, Vec<mpsc::UnboundedSender<Message>>>>>;
+
+#[derive(Deserialize)]
+struct WsParams {
+    user_id: String,
+}
+
+// --------------------------------------
+// WebSocket Handler
+// --------------------------------------
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    Query(params): Query<WsParams>,
+    State(clients): State<Clients>,
+) -> impl IntoResponse {
+    // String zu i32 konvertieren
+    let user_id: i32 = match params.user_id.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            println!("❌ Ungültige user_id: {}", params.user_id);
+            return ws.on_upgrade(|_| async {}); // Leere Verbindung
+        }
+    };
+    ws.on_upgrade(move |socket| handle_socket(socket, user_id, clients))
+}
+
+async fn handle_socket(socket: WebSocket, user_id: i32, clients: Clients) {
+    // Channel für diesen einzelnen Client
+    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+
+    // Speichere den Sender global
+    let mut lock = clients.lock().await;
+
+    lock.entry(user_id).or_insert_with(Vec::new).push(tx);
+
+    let (mut sender, mut receiver) = socket.split();
+
+    // Nachrichten vom Backend an den Client weiterleiten
+    tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            if sender.send(msg).await.is_err() {
+                break; // Client hat geschlossen
+            }
+        }
+    });
+
+    // Server ← Client
+    tokio::spawn(async move {
+        while let Some(Ok(msg)) = receiver.next().await {
+            println!("Got from client {user_id}: {:?}", msg);
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
@@ -184,15 +247,18 @@ async fn main() {
     if let Err(e) = auth::init_admin_user(&mut conn) {
         eprintln!("⚠️ Konnte Admin nicht initialisieren: {e}");
     }
-    let state = Arc::new(AppState { db: pool });
-
+    let clients: Clients = Arc::new(Mutex::new(HashMap::new()));
+    let state = Arc::new(AppState { db: pool, clients });
     let app = Router::new()
+        .route("/ws", get(ws_handler))
+        .with_state(state.clients.clone())
         .route("/api/auth/login", post(login))
         .route("/api/auth/register", post(register))
         // 📁 Upload Routes hinzufügen
         .route("/api/upload", post(upload::upload_file))
+        .with_state(state.clone())
         .route("/api/files", get(upload::list_files))
-        .route("/api/files/:id/download", get(upload::download_file))
+        .route("/api/files/{id}/download", get(upload::download_file))
         .with_state(state)
         .layer(CorsLayer::new().allow_origin(Any));
 

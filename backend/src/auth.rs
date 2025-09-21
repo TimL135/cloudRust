@@ -161,6 +161,14 @@ pub fn create_user(
     Ok(user)
 }
 
+pub fn get_user_by_id(
+    conn: &mut PgConnection,
+    _id: &i32,
+) -> Result<Option<User>, diesel::result::Error> {
+    use self::users::dsl::*;
+    users.filter(id.eq(_id)).first::<User>(conn).optional()
+}
+
 /// Erstellt automatisch einen Admin, falls keiner vorhanden ist.
 pub fn init_admin_user(conn: &mut PgConnection) -> Result<(), Box<dyn std::error::Error>> {
     use self::users::dsl::users; // ✅ nur Tabelle, kein Namenskonflikt

@@ -21,7 +21,7 @@
                     Ziehe Dateien hierher oder klicke auf den Button
                 </p>
 
-                <v-btn color="primary" size="large" @click="$refs.fileInput.click()">
+                <v-btn color="primary" size="large" @click="($refs.fileInput as HTMLInputElement).click()">
                     <v-icon start>mdi-file-plus</v-icon>
                     Dateien auswählen
                 </v-btn>
@@ -71,7 +71,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import {  ref } from "vue";
 
 interface UploadFile {
     name: string;
@@ -145,7 +145,6 @@ const uploadFiles = async () => {
     clearFiles()
 
     const data = await res.json()
-    console.log("Upload erfolgreich:", data)
 
     return data
 }

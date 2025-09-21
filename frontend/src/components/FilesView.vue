@@ -118,5 +118,11 @@ async function downloadFile(id: number, filename: string) {
     }
 }
 
+const socket = new WebSocket("ws://localhost:3000/ws?user_id="+authStore.$state.user?.id);
+
+  socket.onmessage = () => {
+    fetchFiles();
+  };
+
 onMounted(fetchFiles)
 </script>
