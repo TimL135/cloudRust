@@ -4,22 +4,7 @@ use diesel::prelude::*;
 use diesel::{AsChangeset, Insertable, Queryable};
 use serde::{Deserialize, Serialize};
 
-use crate::auth::users::role;
-
-// Schema definition (normalerweise in schema.rs)
-table! {
-    users (id) {
-        id -> Int4,
-        name -> Varchar,
-        email -> Varchar,
-        password_hash -> Varchar,
-        role -> Varchar,
-        created_at -> Nullable<Timestamp>,
-        updated_at -> Nullable<Timestamp>,
-        last_login -> Nullable<Timestamp>,
-        is_active -> Nullable<Bool>,
-    }
-}
+use crate::schema::users::{self, role};
 
 #[derive(Debug, Serialize, Deserialize, Queryable, AsChangeset)]
 #[diesel(table_name = users)]
@@ -103,7 +88,7 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, bcrypt::Bcryp
     verify(password, hash)
 }
 
-pub fn authenticate_user(
+pub fn authenticate(
     conn: &mut PgConnection,
     _email: &str,
     password: &str,
@@ -134,7 +119,7 @@ pub fn authenticate_user(
     }
 }
 
-pub fn create_user(
+pub fn create(
     conn: &mut PgConnection,
     name: &str,
     email: &str,
@@ -170,7 +155,7 @@ pub fn get_user_by_id(
 }
 
 /// Erstellt automatisch einen Admin, falls keiner vorhanden ist.
-pub fn init_admin_user(conn: &mut PgConnection) -> Result<(), Box<dyn std::error::Error>> {
+pub fn init_admin(conn: &mut PgConnection) -> Result<(), Box<dyn std::error::Error>> {
     use self::users::dsl::users; // ✅ nur Tabelle, kein Namenskonflikt
 
     // Prüfen, ob ein Admin existiert

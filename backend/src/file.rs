@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::Json,
 };
+use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,12 +11,36 @@ use std::sync::Arc;
 use tokio::{fs, io::AsyncWriteExt};
 use uuid::Uuid;
 
-use crate::{
-    models::{File, NewFile},
-    schema::files,
-    AppState, AuthenticatedUser,
-};
+use crate::{schema::files, AppState, AuthenticatedUser};
+#[derive(Queryable, Serialize, Clone)]
+#[diesel(table_name = files)]
+#[diesel(check_for_backend(Pg))]
+pub struct File {
+    pub id: i32,
+    pub user_id: i32,
+    pub original_filename: String,
+    pub stored_filename: String,
+    pub file_path: String,
+    pub file_size: i64,
+    pub mime_type: Option<String>,
+    pub file_hash: Option<String>,
+    pub upload_status: Option<String>,
+    pub created_at: Option<NaiveDateTime>,
+    pub updated_at: Option<NaiveDateTime>,
+}
 
+#[derive(Insertable)]
+#[diesel(table_name = crate::schema::files)]
+pub struct NewFile {
+    pub user_id: i32,
+    pub original_filename: String,
+    pub stored_filename: String,
+    pub file_path: String,
+    pub file_size: i64,
+    pub mime_type: Option<String>,
+    pub file_hash: Option<String>,
+    pub upload_status: String,
+}
 #[derive(Serialize)]
 pub struct UploadResponse {
     pub id: i32,
@@ -36,7 +61,6 @@ pub struct FileInfo {
     pub original_filename: String,
     pub file_size: i64,
     pub mime_type: Option<String>,
-    pub is_public: bool,
     pub created_at: chrono::NaiveDateTime,
 }
 
@@ -44,10 +68,9 @@ pub struct FileInfo {
 pub struct FileQuery {
     pub page: Option<i64>,
     pub limit: Option<i64>,
-    pub public_only: Option<bool>,
 }
 
-pub async fn upload_file(
+pub async fn upload(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> Result<Json<Vec<UploadResponse>>, StatusCode> {
@@ -102,7 +125,6 @@ pub async fn upload_file(
                 file_size: data.len() as i64,
                 mime_type: Some(content_type),
                 file_hash: Some(file_hash),
-                is_public: false,
                 upload_status: "completed".into(),
             };
 
@@ -139,7 +161,7 @@ pub async fn upload_file(
     }
 }
 
-pub async fn list_files(
+pub async fn list(
     State(state): State<Arc<AppState>>,
     Query(params): Query<FileQuery>,
     auth_user: AuthenticatedUser,
@@ -156,11 +178,7 @@ pub async fn list_files(
 
     let mut query = files::table.into_boxed();
 
-    if params.public_only.unwrap_or(false) {
-        query = query.filter(files::is_public.eq(true));
-    } else {
-        query = query.filter(files::user_id.eq(user_id));
-    }
+    query = query.filter(files::user_id.eq(user_id));
 
     let files_result: Vec<File> = query
         .order(files::created_at.desc())
@@ -182,8 +200,7 @@ pub async fn list_files(
             original_filename: f.original_filename,
             file_size: f.file_size,
             mime_type: f.mime_type,
-            is_public: f.is_public,
-            created_at: f.created_at,
+            created_at: f.created_at.unwrap(),
         })
         .collect();
 
@@ -193,7 +210,7 @@ pub async fn list_files(
     }))
 }
 
-pub async fn download_file(
+pub async fn download(
     State(state): State<Arc<AppState>>,
     Path(file_id): Path<i32>,
     auth_user: AuthenticatedUser,
@@ -208,7 +225,7 @@ pub async fn download_file(
         .first(&mut conn)
         .map_err(|_| StatusCode::NOT_FOUND)?;
 
-    if file.user_id != auth_user.user_id && !file.is_public {
+    if file.user_id != auth_user.user_id {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -219,7 +236,7 @@ pub async fn download_file(
     Ok(file_data)
 }
 
-pub async fn delete_file(
+pub async fn delete(
     State(state): State<Arc<AppState>>,
     Path(file_id): Path<i32>,
     auth_user: AuthenticatedUser,

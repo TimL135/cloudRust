@@ -21,12 +21,11 @@ use tokio::{
 };
 use tower_http::cors::{Any, CorsLayer};
 
-mod auth;
-mod models;
+mod file;
 mod schema;
-mod upload;
+mod user;
 
-use auth::*;
+use user::*;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -125,7 +124,7 @@ pub async fn login(
         .get()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    match authenticate_user(&mut conn, &payload.email, &payload.password) {
+    match authenticate(&mut conn, &payload.email, &payload.password) {
         Ok(Some(user)) => {
             // JWT Token erstellen
             let token = create_jwt_token(user.id)?;
@@ -156,7 +155,7 @@ async fn register(
         .get()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    match create_user(&mut conn, &payload.name, &payload.email, &payload.password) {
+    match create(&mut conn, &payload.name, &payload.email, &payload.password) {
         Ok(user) => {
             // 👇 Auch bei Register ein JWT-Token erstellen!
             let token = create_jwt_token(user.id)?;
@@ -244,7 +243,7 @@ async fn main() {
         .build(manager)
         .expect("DB Pool konnte nicht erstellt werden");
     let mut conn = pool.get().expect("Keine Verbindung aus Pool");
-    if let Err(e) = auth::init_admin_user(&mut conn) {
+    if let Err(e) = user::init_admin(&mut conn) {
         eprintln!("⚠️ Konnte Admin nicht initialisieren: {e}");
     }
     let clients: Clients = Arc::new(Mutex::new(HashMap::new()));
@@ -255,12 +254,12 @@ async fn main() {
         .route("/api/auth/login", post(login))
         .route("/api/auth/register", post(register))
         // 📁 Upload Routes hinzufügen
-        .route("/api/upload", post(upload::upload_file))
+        .route("/api/upload", post(file::upload))
         .with_state(state.clone())
-        .route("/api/files", get(upload::list_files))
-        .route("/api/files/{id}/download", get(upload::download_file))
+        .route("/api/files", get(file::list))
+        .route("/api/files/{id}/download", get(file::download))
         .with_state(state.clone())
-        .route("/api/files/{id}/delete", get(upload::delete_file))
+        .route("/api/files/{id}/delete", get(file::delete))
         .with_state(state)
         .layer(CorsLayer::new().allow_origin(Any));
 

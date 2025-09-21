@@ -70,13 +70,13 @@
 
 <script setup lang="ts">
 import { useAuthStore } from "@/stores/auth"
+import { apiRequest } from "@/api"
 import { ref, onMounted, computed } from "vue"
 
 interface FileItem {
   id: number
   original_filename: string
 }
-
 const authStore = useAuthStore()
 
 interface FileInfo {
@@ -124,7 +124,7 @@ async function fetchFiles() {
     loading.value = true
     error.value = ""
     try {
-        const res = await authStore.apiRequest('/api/files')
+        const res = await apiRequest('/api/files')
         if (!res.ok) throw new Error("Fehler beim Laden der Dateien")
         const data = await res.json()
         files.value = data.files
@@ -138,7 +138,7 @@ async function fetchFiles() {
 // File Download
 async function downloadFile(id: number, filename: string) {
     try {
-        const res = await authStore.apiRequest(`/api/files/${id}/download`)
+        const res = await apiRequest(`/api/files/${id}/download`)
         if (!res.ok) throw new Error("Fehler beim Download")
 
         const blob = await res.blob()
@@ -157,7 +157,7 @@ async function downloadFile(id: number, filename: string) {
 
 async function deleteFile(id: number) {
     try {
-        const res = await authStore.apiRequest(`/api/files/${id}/delete`)
+        const res = await apiRequest(`/api/files/${id}/delete`)
         if (!res.ok) throw new Error("Fehler beim Loschen")
     } catch (e: any) {
         alert(e.message ?? "Download fehlgeschlagen")
