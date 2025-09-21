@@ -9,15 +9,8 @@
         <!-- Suchleiste -->
         <v-row>
             <v-col>
-                <v-text-field
-                    v-model="searchQuery"
-                    label="Nach Dateiname suchen..."
-                    prepend-inner-icon="mdi-magnify"
-                    clearable
-                    variant="outlined"
-                    density="compact"
-                    class="mb-4"
-                />
+                <v-text-field v-model="searchQuery" label="Nach Dateiname suchen..." prepend-inner-icon="mdi-magnify"
+                    clearable variant="outlined" density="compact" class="mb-4" />
             </v-col>
         </v-row>
 
@@ -69,7 +62,7 @@ const error = ref("")
 const searchQuery = ref("")
 const filteredFiles = computed(() => {
     if (!searchQuery.value) return files.value
-    return files.value.filter(file => 
+    return files.value.filter(file =>
         file.original_filename.toLowerCase().includes(searchQuery.value.toLowerCase())
     )
 })
@@ -78,7 +71,17 @@ const headers = [
     { title: "Dateiname", key: "original_filename" },
     { title: "Größe (KB)", key: "file_size", value: (f: FileInfo) => (f.file_size / 1024).toFixed(1) },
     { title: "MIME", key: "mime_type" },
-    { title: "Hochgeladen am", key: "created_at" },
+    {
+        title: "Hochgeladen am",
+        key: "created_at",
+        value: (f: FileInfo) => {
+            const utcString = f.created_at.endsWith("Z") ? f.created_at : f.created_at + "Z";
+            return new Date(utcString).toLocaleString("de-DE", {
+                dateStyle: "medium",
+                timeStyle: "short"
+            });
+        }
+    },
     { title: "Aktionen", key: "actions", sortable: false },
 ]
 
@@ -118,11 +121,11 @@ async function downloadFile(id: number, filename: string) {
     }
 }
 
-const socket = new WebSocket("ws://localhost:3000/ws?user_id="+authStore.$state.user?.id);
+const socket = new WebSocket("ws://localhost:3000/ws?user_id=" + authStore.$state.user?.id);
 
-  socket.onmessage = () => {
+socket.onmessage = () => {
     fetchFiles();
-  };
+};
 
 onMounted(fetchFiles)
 </script>

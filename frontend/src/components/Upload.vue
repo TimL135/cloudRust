@@ -28,14 +28,6 @@
                 <input ref="fileInput" type="file" multiple class="d-none" @change="handleFileSelect" />
             </div>
 
-            <!-- Ordner Auswahl -->
-            <v-row class="mb-6">
-                <v-col cols="12" md="6">
-                    <v-switch v-model="overwriteFiles" color="warning" hide-details
-                        :label="`Existierende Dateien überschreiben: ${overwriteFiles ? 'Ja' : 'Nein'}`" />
-                </v-col>
-            </v-row>
-
             <!-- Datei Liste -->
             <v-list v-if="files.length > 0" lines="two">
                 <v-list-item v-for="(file, i) in files" :key="i" rounded="lg" class="mb-2">
@@ -82,7 +74,6 @@ interface UploadFile {
 
 const files = ref<UploadFile[]>([]);
 const isDragOver = ref(false);
-const overwriteFiles = ref(false);
 
 const handleDrop = (e: DragEvent) => {
     e.preventDefault();
@@ -128,8 +119,6 @@ const uploadFiles = async () => {
     for (const file of files.value) {
         formData.append("file", file.file) // muss "file" heißen, wie im Backend
     }
-
-    formData.append("overwrite", String(overwriteFiles.value ?? false))
 
     // API Call machen
     const res = await fetch("/api/upload", {
