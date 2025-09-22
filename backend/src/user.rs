@@ -1,10 +1,17 @@
+use axum::{
+    extract::{FromRequestParts, State},
+    http::{request::Parts, StatusCode},
+    Json,
+};
 use bcrypt::{hash, verify, DEFAULT_COST};
-use chrono::{NaiveDateTime, Utc};
-use diesel::prelude::*;
-use diesel::{AsChangeset, Insertable, Queryable};
+use chrono::{Duration, NaiveDateTime, Utc};
+use diesel::{prelude::*, r2d2::ConnectionManager, AsChangeset, Insertable, Queryable};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::schema::users::{self, role};
+use crate::{AppState, Claims};
 
 #[derive(Debug, Serialize, Deserialize, Queryable, AsChangeset)]
 #[diesel(table_name = users)]
@@ -80,12 +87,138 @@ impl From<User> for UserResponse {
     }
 }
 
+pub struct AuthenticatedUser {
+    pub user_id: i32,
+    pub role: String,
+}
+
+impl<S> FromRequestParts<S> for AuthenticatedUser
+where
+    S: Send + Sync,
+{
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // Extract Authorization header
+        let auth_header = parts
+            .headers
+            .get("Authorization")
+            .and_then(|header| header.to_str().ok())
+            .ok_or(StatusCode::UNAUTHORIZED)?;
+
+        // Check if it starts with "Bearer "
+        if !auth_header.starts_with("Bearer ") {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+
+        let token = &auth_header[7..]; // Remove "Bearer " prefix
+
+        // Decode JWT token
+        let jwt_secret =
+            std::env::var("JWT_SECRET").unwrap_or_else(|_| "your-secret-key".to_string());
+
+        let token_data = decode::<Claims>(
+            token,
+            &DecodingKey::from_secret(jwt_secret.as_ref()),
+            &Validation::new(Algorithm::HS256),
+        )
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+        let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL muss gesetzt sein");
+        let manager = ConnectionManager::<PgConnection>::new(db_url);
+        let pool = r2d2::Pool::builder()
+            .build(manager)
+            .expect("DB Pool konnte nicht erstellt werden");
+        let mut conn = pool.get().expect("Keine Verbindung aus Pool");
+
+        let user_id = token_data.claims.user_id;
+        let user = get_user_by_id(&mut conn, &user_id)
+            .unwrap_or_else(|e| {
+                eprintln!("Error getting user: {}", e);
+                None
+            })
+            .unwrap_or_else(|| {
+                panic!("User not found");
+            });
+        Ok(AuthenticatedUser {
+            user_id,
+            role: user.role,
+        })
+    }
+}
+
 pub fn hash_password(password: &str) -> Result<String, bcrypt::BcryptError> {
     hash(password, DEFAULT_COST)
 }
 
 pub fn verify_password(password: &str, hash: &str) -> Result<bool, bcrypt::BcryptError> {
     verify(password, hash)
+}
+
+pub async fn login(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<LoginRequest>,
+) -> Result<Json<AuthResponse>, StatusCode> {
+    let mut conn = state
+        .db
+        .get()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    match authenticate(&mut conn, &payload.email, &payload.password) {
+        Ok(Some(user)) => {
+            // JWT Token erstellen
+            let token = create_jwt_token(user.id)?;
+
+            Ok(Json(AuthResponse {
+                success: true,
+                message: "Login erfolgreich".to_string(),
+                token: Some(token), // 👈 Token zurückgeben
+                user: Some(user.into()),
+            }))
+        }
+        Ok(None) => Ok(Json(AuthResponse {
+            success: false,
+            message: "Ungültige Anmeldedaten".to_string(),
+            token: None,
+            user: None,
+        })),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+pub async fn register(
+    State(state): State<Arc<AppState>>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<RegisterRequest>,
+) -> Result<StatusCode, StatusCode> {
+    if auth_user.role != "admin" {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let mut conn = state
+        .db
+        .get()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    match create(&mut conn, &payload.name, &payload.email, &payload.password) {
+        Ok(_) => Ok(StatusCode::OK),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+fn create_jwt_token(user_id: i32) -> Result<String, StatusCode> {
+    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "your-secret-key".to_string());
+
+    let claims = Claims {
+        user_id,
+        exp: (Utc::now() + Duration::hours(24)).timestamp() as usize,
+    };
+
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(jwt_secret.as_ref()),
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 pub fn authenticate(

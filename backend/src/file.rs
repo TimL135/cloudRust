@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::{fs, io::AsyncWriteExt};
 use uuid::Uuid;
 
-use crate::{schema::files, AppState, AuthenticatedUser};
+use crate::{schema::files, user::AuthenticatedUser, AppState};
 #[derive(Queryable, Serialize, Clone)]
 #[diesel(table_name = files)]
 #[diesel(check_for_backend(Pg))]

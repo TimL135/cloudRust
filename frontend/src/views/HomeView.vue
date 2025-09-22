@@ -53,8 +53,8 @@
       </v-card>
     </v-dialog>
 
-    <v-snackbar v-model="snackbar" rounded="pill" vertical color="success">
-        User erfolgreich angelegt
+    <v-snackbar v-model="snackbar.show" rounded="pill" vertical color="success">
+      {{ snackbar.text }}
     </v-snackbar>
 
   </v-container>
@@ -80,6 +80,12 @@ interface UserErrors {
   password: string[]
 }
 
+interface Snackbar {
+  show: boolean
+  color: "success" | "error"
+  text: string
+}
+
 const auth = useAuthStore()
 const router = useRouter()
 
@@ -87,7 +93,13 @@ const router = useRouter()
 const userModal = ref(false)
 const loading = ref(false)
 
-const snackbar = ref(false)
+const snackbar = reactive<Snackbar>({
+  show: false,
+  color: "success",
+  text: "",
+})
+
+
 
 const newUser = reactive<NewUser>({
   name: '',
@@ -161,10 +173,14 @@ const createUser = async () => {
 
     // Erfolg - Modal schließen
     closeUserModal()
-    snackbar.value = true
+    snackbar.color = "success"
+    snackbar.text = "User erfolgreich angelegt"
+    snackbar.show = true
 
   } catch (error) {
-    console.error('Fehler beim Erstellen des Users:', error)
+    snackbar.color = "error"
+    snackbar.text = "Fehler beim User anlegen"
+    snackbar.show = true
     // Error handling
   } finally {
     loading.value = false
