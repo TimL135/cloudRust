@@ -1,5 +1,5 @@
--- Lösche alte users Tabelle falls vorhanden
-DROP TABLE IF EXISTS users;
+-- Migration: Create users table with authentication system
+-- Up migration
 
 -- Erstelle neue users Tabelle mit vollständigem Auth-System
 CREATE TABLE users (
@@ -17,12 +17,3 @@ CREATE TABLE users (
 -- Index für bessere Performance bei Login-Queries
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_role ON users(role);
-
--- Trigger für updated_at automatisch setzen
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
-    RETURN NEW;
-END;
-$$ language 'plpgsql';

@@ -1,5 +1,6 @@
--- Add migration script here
--- 002_create_files_table.sql
+-- Migration: Create files table for file management
+-- Up migration
+
 CREATE TABLE files (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -9,11 +10,12 @@ CREATE TABLE files (
     file_size BIGINT NOT NULL,
     mime_type VARCHAR(100),
     file_hash VARCHAR(64), -- SHA-256 hash
-    upload_status VARCHAR(20) DEFAULT 'completed', -- pending, completed, failed
+    upload_status VARCHAR(20) DEFAULT 'completed' CHECK (upload_status IN ('pending', 'completed', 'failed')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Indizes für bessere Performance
 CREATE INDEX idx_files_user_id ON files(user_id);
 CREATE INDEX idx_files_hash ON files(file_hash);
 CREATE INDEX idx_files_status ON files(upload_status);
