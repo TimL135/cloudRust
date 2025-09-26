@@ -25,7 +25,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
@@ -49,4 +49,10 @@ async function doLogin() {
     loading.value = false
   }
 }
+
+onMounted(async()=>{
+  if(await auth.auth_check()) router.push("/")
+})
+
+
 </script>

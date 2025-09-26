@@ -7,11 +7,12 @@ use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tower_cookies::Cookies;
 use std::sync::Arc;
 use tokio::{fs, io::AsyncWriteExt};
 use uuid::Uuid;
 
-use crate::{schema::files, user::AuthenticatedUser, AppState};
+use crate::{schema::files, user::{authenticate_user_from_cookie}, AppState};
 #[derive(Queryable, Serialize, Clone)]
 #[diesel(table_name = files)]
 #[diesel(check_for_backend(Pg))]
@@ -163,10 +164,13 @@ pub async fn upload(
 
 pub async fn list(
     State(state): State<Arc<AppState>>,
+    cookies: Cookies,
     Query(params): Query<FileQuery>,
-    auth_user: AuthenticatedUser,
 ) -> Result<Json<FileListResponse>, StatusCode> {
-    let user_id = auth_user.user_id; // Extract from JWT token
+   println!("test");
+    let auth_user = authenticate_user_from_cookie(State(state.clone()), cookies.clone()).await?;
+    let user_id=auth_user.user_id;
+    println!("{}", user_id);
     let page = params.page.unwrap_or(1);
     let limit = params.limit.unwrap_or(20);
     let offset = (page - 1) * limit;
@@ -212,9 +216,11 @@ pub async fn list(
 
 pub async fn download(
     State(state): State<Arc<AppState>>,
+    cookies: Cookies,
     Path(file_id): Path<i32>,
-    auth_user: AuthenticatedUser,
 ) -> Result<Vec<u8>, StatusCode> {
+    let auth_user = authenticate_user_from_cookie(State(state.clone()), cookies.clone()).await?;
+
     let mut conn = state
         .db
         .get()
@@ -238,9 +244,11 @@ pub async fn download(
 
 pub async fn delete(
     State(state): State<Arc<AppState>>,
+    cookies: Cookies,
     Path(file_id): Path<i32>,
-    auth_user: AuthenticatedUser,
 ) -> Result<StatusCode, StatusCode> {
+    let auth_user = authenticate_user_from_cookie(State(state.clone()), cookies.clone()).await?;
+
     let mut conn = state
         .db
         .get()

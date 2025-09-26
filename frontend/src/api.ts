@@ -9,19 +9,15 @@ export async function apiRequest(
 ) {
   const auth = useAuthStore();
 
-  if (!auth.token) {
-    throw new Error("Nicht authentifiziert");
-  }
-
   const headers = {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${auth.token}`,
     ...options.headers, // Falls du zusätzliche Headers brauchst
   };
   const request = {
     ...options,
     method,
     headers,
+    credentials: "include" as const,
   };
   if (method == "POST") request.body = JSON.stringify(data);
   const res = await fetch(url, request);
