@@ -18,9 +18,13 @@ export const useAuthStore = defineStore("auth", {
   actions: {
     async auth_check() {
       try {
-        let user = await apiRequest("/api/auth/auth_check", {}, "GET")
-        this.user = user as unknown as User;
-        return true
+        let res = await apiRequest("/api/auth/auth_check", {}, "GET")
+        if (res.ok) {
+          let data = await res.json()
+          this.user = data.user
+          return true
+        }
+        return false
       } catch {
         return false
       }

@@ -1,13 +1,6 @@
 use axum::{extract::State, http::StatusCode, Json};
-use axum::{
-    extract::{ State},
-    http::{ StatusCode},
-    Json,
-};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration as ChronoDuration, NaiveDateTime, Utc};
-use diesel::{prelude::*, AsChangeset, Insertable, Queryable};
-use chrono::{ Duration as ChronoDuration, NaiveDateTime, Utc};
 use diesel::{prelude::*, AsChangeset, Insertable, Queryable};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
@@ -110,22 +103,6 @@ pub async fn authenticate_user_from_cookie(
     // 2️⃣ JWT Token validieren
     let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "your-secret-key".to_string());
 
-
-// 🔐 Authentifizierungs-Funktion für Handler
-pub async fn authenticate_user_from_cookie(
-    State(state): State<Arc<AppState>>,
-    cookies: Cookies,
-) -> Result<AuthenticatedUser, StatusCode> {
-    // 1️⃣ Access Token aus Cookie extrahieren
-    let token = cookies
-        .get("access_token")
-        .and_then(|cookie| Some(cookie.value().to_string()))
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    // 2️⃣ JWT Token validieren
-    let jwt_secret = std::env::var("JWT_SECRET")
-        .unwrap_or_else(|_| "your-secret-key".to_string());
-
     let token_data = decode::<Claims>(
         &token,
         &DecodingKey::from_secret(jwt_secret.as_ref()),
@@ -167,7 +144,7 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, bcrypt::Bcryp
 pub async fn auth_check(
     State(state): State<Arc<AppState>>,
     cookies: Cookies,
-) -> Result<Json<UserResponse>, StatusCode> {
+) -> Result<Json<AuthResponse>, StatusCode> {
     // Prüft Cookie und gibt User-Daten zurück
     let auth_user = authenticate_user_from_cookie(State(state.clone()), cookies).await?;
     let mut conn = state
@@ -179,7 +156,11 @@ pub async fn auth_check(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    Ok(Json(user.into()))
+    Ok(Json(AuthResponse {
+        success: true,
+        message: "Login erfolgreich".to_string(),
+        user: Some(user.into()),
+    }))
 }
 
 pub async fn login(

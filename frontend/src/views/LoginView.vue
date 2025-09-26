@@ -39,7 +39,8 @@ async function doLogin() {
 }
 
 onMounted(async () => {
-  if (await auth.auth_check())
+  let res = await auth.auth_check()
+  if (res)
     router.push("/")
 })
 
