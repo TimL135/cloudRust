@@ -1,6 +1,13 @@
 use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    extract::{ State},
+    http::{ StatusCode},
+    Json,
+};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration as ChronoDuration, NaiveDateTime, Utc};
+use diesel::{prelude::*, AsChangeset, Insertable, Queryable};
+use chrono::{ Duration as ChronoDuration, NaiveDateTime, Utc};
 use diesel::{prelude::*, AsChangeset, Insertable, Queryable};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
@@ -103,6 +110,22 @@ pub async fn authenticate_user_from_cookie(
     // 2️⃣ JWT Token validieren
     let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "your-secret-key".to_string());
 
+
+// 🔐 Authentifizierungs-Funktion für Handler
+pub async fn authenticate_user_from_cookie(
+    State(state): State<Arc<AppState>>,
+    cookies: Cookies,
+) -> Result<AuthenticatedUser, StatusCode> {
+    // 1️⃣ Access Token aus Cookie extrahieren
+    let token = cookies
+        .get("access_token")
+        .and_then(|cookie| Some(cookie.value().to_string()))
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // 2️⃣ JWT Token validieren
+    let jwt_secret = std::env::var("JWT_SECRET")
+        .unwrap_or_else(|_| "your-secret-key".to_string());
+
     let token_data = decode::<Claims>(
         &token,
         &DecodingKey::from_secret(jwt_secret.as_ref()),
@@ -147,7 +170,6 @@ pub async fn auth_check(
 ) -> Result<Json<UserResponse>, StatusCode> {
     // Prüft Cookie und gibt User-Daten zurück
     let auth_user = authenticate_user_from_cookie(State(state.clone()), cookies).await?;
-
     let mut conn = state
         .db
         .get()
@@ -174,6 +196,17 @@ pub async fn login(
         Ok(Some(user)) => {
             // JWT Token erstellen
             let token = create_jwt_token(user.id)?;
+
+            // 2. Cookie setzen (HttpOnly, Secure, SameSite)
+            cookies.add(
+                Cookie::build(("access_token", token.clone()))
+                    .http_only(true)
+                    .secure(false) // f�r localhost auf http=false lassen, PROD = true
+                    .same_site(tower_cookies::cookie::SameSite::Lax)
+                    .path("/")
+                    .max_age(Duration::minutes(15))
+                    .build(),
+            );
 
             // 2. Cookie setzen (HttpOnly, Secure, SameSite)
             cookies.add(
