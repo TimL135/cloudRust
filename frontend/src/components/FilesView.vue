@@ -121,6 +121,7 @@ const headers = [
 
 // Files laden
 async function fetchFiles() {
+    console.log("fetchFiles")
     loading.value = true
     error.value = ""
     try {
@@ -130,6 +131,7 @@ async function fetchFiles() {
         files.value = data.files
     } catch (e: any) {
         error.value = e.message ?? "Unbekannter Fehler"
+        console.log(e)
     } finally {
         loading.value = false
     }

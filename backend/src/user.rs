@@ -1,17 +1,15 @@
-use axum::{
-    extract::{FromRequestParts, State},
-    http::{request::Parts, StatusCode},
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 use bcrypt::{hash, verify, DEFAULT_COST};
-use chrono::{Duration, NaiveDateTime, Utc};
-use diesel::{prelude::*, r2d2::ConnectionManager, AsChangeset, Insertable, Queryable};
+use chrono::{Duration as ChronoDuration, NaiveDateTime, Utc};
+use diesel::{prelude::*, AsChangeset, Insertable, Queryable};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::schema::users::{self, role};
 use crate::{AppState, Claims};
+use time::Duration;
+use tower_cookies::{Cookie, Cookies};
 
 #[derive(Debug, Serialize, Deserialize, Queryable, AsChangeset)]
 #[diesel(table_name = users)]
@@ -56,7 +54,6 @@ pub struct RegisterRequest {
 pub struct AuthResponse {
     pub success: bool,
     pub message: String,
-    pub token: Option<String>,
     pub user: Option<UserResponse>,
 }
 
@@ -92,58 +89,48 @@ pub struct AuthenticatedUser {
     pub role: String,
 }
 
-impl<S> FromRequestParts<S> for AuthenticatedUser
-where
-    S: Send + Sync,
-{
-    type Rejection = StatusCode;
+// 🔐 Authentifizierungs-Funktion für Handler
+pub async fn authenticate_user_from_cookie(
+    State(state): State<Arc<AppState>>,
+    cookies: Cookies,
+) -> Result<AuthenticatedUser, StatusCode> {
+    // 1️⃣ Access Token aus Cookie extrahieren
+    let token = cookies
+        .get("access_token")
+        .and_then(|cookie| Some(cookie.value().to_string()))
+        .ok_or(StatusCode::NOT_FOUND)?;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        // Extract Authorization header
-        let auth_header = parts
-            .headers
-            .get("Authorization")
-            .and_then(|header| header.to_str().ok())
-            .ok_or(StatusCode::UNAUTHORIZED)?;
+    // 2️⃣ JWT Token validieren
+    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "your-secret-key".to_string());
 
-        // Check if it starts with "Bearer "
-        if !auth_header.starts_with("Bearer ") {
-            return Err(StatusCode::UNAUTHORIZED);
-        }
+    let token_data = decode::<Claims>(
+        &token,
+        &DecodingKey::from_secret(jwt_secret.as_ref()),
+        &Validation::new(Algorithm::HS256),
+    )
+    .map_err(|_| StatusCode::NOT_FOUND)?;
 
-        let token = &auth_header[7..]; // Remove "Bearer " prefix
+    let user_id = token_data.claims.user_id;
 
-        // Decode JWT token
-        let jwt_secret =
-            std::env::var("JWT_SECRET").unwrap_or_else(|_| "your-secret-key".to_string());
+    // 3️⃣ User aus DB laden und validieren
+    let mut conn = state
+        .db
+        .get()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let token_data = decode::<Claims>(
-            token,
-            &DecodingKey::from_secret(jwt_secret.as_ref()),
-            &Validation::new(Algorithm::HS256),
-        )
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
-        let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL muss gesetzt sein");
-        let manager = ConnectionManager::<PgConnection>::new(db_url);
-        let pool = r2d2::Pool::builder()
-            .build(manager)
-            .expect("DB Pool konnte nicht erstellt werden");
-        let mut conn = pool.get().expect("Keine Verbindung aus Pool");
+    let user = get_user_by_id(&mut conn, &user_id)
+        .map_err(|_| StatusCode::NOT_FOUND)?
+        .ok_or(StatusCode::NOT_FOUND)?;
 
-        let user_id = token_data.claims.user_id;
-        let user = get_user_by_id(&mut conn, &user_id)
-            .unwrap_or_else(|e| {
-                eprintln!("Error getting user: {}", e);
-                None
-            })
-            .unwrap_or_else(|| {
-                panic!("User not found");
-            });
-        Ok(AuthenticatedUser {
-            user_id,
-            role: user.role,
-        })
+    // 4️⃣ User ist aktiv prüfen
+    if user.is_active != Some(true) {
+        return Err(StatusCode::FORBIDDEN);
     }
+
+    Ok(AuthenticatedUser {
+        user_id,
+        role: user.role,
+    })
 }
 
 pub fn hash_password(password: &str) -> Result<String, bcrypt::BcryptError> {
@@ -154,8 +141,28 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, bcrypt::Bcryp
     verify(password, hash)
 }
 
+pub async fn auth_check(
+    State(state): State<Arc<AppState>>,
+    cookies: Cookies,
+) -> Result<Json<UserResponse>, StatusCode> {
+    // Prüft Cookie und gibt User-Daten zurück
+    let auth_user = authenticate_user_from_cookie(State(state.clone()), cookies).await?;
+
+    let mut conn = state
+        .db
+        .get()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let user = get_user_by_id(&mut conn, &auth_user.user_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    Ok(Json(user.into()))
+}
+
 pub async fn login(
     State(state): State<Arc<AppState>>,
+    cookies: Cookies,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, StatusCode> {
     let mut conn = state
@@ -168,17 +175,26 @@ pub async fn login(
             // JWT Token erstellen
             let token = create_jwt_token(user.id)?;
 
+            // 2. Cookie setzen (HttpOnly, Secure, SameSite)
+            cookies.add(
+                Cookie::build(("access_token", token.clone()))
+                    .http_only(true)
+                    .secure(false) // f�r localhost auf http=false lassen, PROD = true
+                    .same_site(tower_cookies::cookie::SameSite::Lax)
+                    .path("/")
+                    .max_age(Duration::minutes(15))
+                    .build(),
+            );
+
             Ok(Json(AuthResponse {
                 success: true,
                 message: "Login erfolgreich".to_string(),
-                token: Some(token), // 👈 Token zurückgeben
                 user: Some(user.into()),
             }))
         }
         Ok(None) => Ok(Json(AuthResponse {
             success: false,
             message: "Ungültige Anmeldedaten".to_string(),
-            token: None,
             user: None,
         })),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -187,13 +203,8 @@ pub async fn login(
 
 pub async fn register(
     State(state): State<Arc<AppState>>,
-    auth_user: AuthenticatedUser,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<StatusCode, StatusCode> {
-    if auth_user.role != "admin" {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
     let mut conn = state
         .db
         .get()
@@ -210,7 +221,7 @@ fn create_jwt_token(user_id: i32) -> Result<String, StatusCode> {
 
     let claims = Claims {
         user_id,
-        exp: (Utc::now() + Duration::hours(24)).timestamp() as usize,
+        exp: (Utc::now() + ChronoDuration::hours(24)).timestamp() as usize,
     };
 
     encode(

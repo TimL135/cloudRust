@@ -3,20 +3,8 @@
     <v-card class="pa-6" width="400" elevation="8">
       <v-card-title class="text-center">🔐 Login</v-card-title>
       <v-card-text>
-        <v-text-field
-          v-model="email"
-          label="E-Mail"
-          type="email"
-          variant="outlined"
-          class="mb-3"
-        />
-        <v-text-field
-          v-model="password"
-          label="Passwort"
-          type="password"
-          variant="outlined"
-          class="mb-3"
-        />
+        <v-text-field v-model="email" label="E-Mail" type="email" variant="outlined" class="mb-3" />
+        <v-text-field v-model="password" label="Passwort" type="password" variant="outlined" class="mb-3" />
         <v-btn block color="primary" :loading="loading" @click="doLogin">Einloggen</v-btn>
         <v-alert v-if="error" type="error" class="mt-3">{{ error }}</v-alert>
       </v-card-text>
@@ -25,7 +13,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
@@ -49,4 +37,11 @@ async function doLogin() {
     loading.value = false
   }
 }
+
+onMounted(async () => {
+  if (await auth.auth_check())
+    router.push("/")
+})
+
+
 </script>

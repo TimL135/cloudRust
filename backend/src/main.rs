@@ -18,6 +18,8 @@ use tokio::{
     net::TcpListener,
     sync::{mpsc, Mutex},
 };
+use tower_cookies::{CookieManagerLayer};
+
 use tower_http::cors::{Any, CorsLayer};
 
 mod file;
@@ -112,6 +114,7 @@ async fn main() {
         .route("/ws", get(ws_handler))
         .with_state(state.clients.clone())
         .route("/api/auth/login", post(user::login))
+        .route("/api/auth/auth_check", get(user::auth_check))
         .route("/api/auth/register", post(user::register))
         // 📁 Upload Routes hinzufügen
         .route("/api/upload", post(file::upload))
@@ -119,6 +122,7 @@ async fn main() {
         .route("/api/files/{id}/download", get(file::download))
         .route("/api/files/{id}/delete", get(file::delete))
         .with_state(state)
+        .layer(CookieManagerLayer::new())
         .layer(CorsLayer::new().allow_origin(Any));
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
