@@ -126,10 +126,25 @@ async fn main() {
         .layer(CookieManagerLayer::new())
         .layer(CorsLayer::new().allow_origin(Any));
 
-    let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listener = match TcpListener::bind("0.0.0.0:3000").await {
+        Ok(listener) => listener,
+        Err(e) => {
+            eprintln!("Failed to bind to port 3000: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     println!("🚀 Backend läuft auf http://127.0.0.1:3000");
     println!("🔐 Standard Admin: admin@localhost / admin");
     println!("📁 Upload API: POST /api/upload");
-    axum::serve(listener, app).await.unwrap();
+    match axum::serve(listener, app).await {
+        Ok(_) => {
+            println!("Server has stopped running");
+        }
+        Err(e) => {
+            eprintln!("Fatal server error: {}", e);
+            eprintln!("Server will now exit");
+            std::process::exit(1);
+        }
+    }
 }

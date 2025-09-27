@@ -3,16 +3,16 @@ use axum::{
     http::StatusCode,
     response::Json,
 };
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tower_cookies::Cookies;
 use std::sync::Arc;
 use tokio::{fs, io::AsyncWriteExt};
+use tower_cookies::Cookies;
 use uuid::Uuid;
 
-use crate::{schema::files, user::{authenticate_user_from_cookie}, AppState};
+use crate::{schema::files, user::authenticate_user_from_cookie, AppState};
 #[derive(Queryable, Serialize, Clone)]
 #[diesel(table_name = files)]
 #[diesel(check_for_backend(Pg))]
@@ -168,7 +168,7 @@ pub async fn list(
     Query(params): Query<FileQuery>,
 ) -> Result<Json<FileListResponse>, StatusCode> {
     let auth_user = authenticate_user_from_cookie(State(state.clone()), cookies.clone()).await?;
-    let user_id=auth_user.user_id;
+    let user_id = auth_user.user_id;
     let page = params.page.unwrap_or(1);
     let limit = params.limit.unwrap_or(20);
     let offset = (page - 1) * limit;
@@ -202,7 +202,7 @@ pub async fn list(
             original_filename: f.original_filename,
             file_size: f.file_size,
             mime_type: f.mime_type,
-            created_at: f.created_at.unwrap(),
+            created_at: f.created_at.unwrap_or(Utc::now().naive_utc()),
         })
         .collect();
 

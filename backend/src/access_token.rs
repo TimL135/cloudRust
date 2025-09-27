@@ -28,7 +28,11 @@ pub struct NewAccessToken {
     pub expires_at: NaiveDateTime,
 }
 
-pub fn create(conn: &mut PgConnection, user_id: i32, cookies: Cookies) {
+pub fn create(
+    conn: &mut PgConnection,
+    user_id: i32,
+    cookies: Cookies,
+) -> Result<(), Box<dyn std::error::Error>> {
     let token = generate_secure_token(64);
     let new_access_token = NewAccessToken {
         user_id,
@@ -37,8 +41,7 @@ pub fn create(conn: &mut PgConnection, user_id: i32, cookies: Cookies) {
     };
     diesel::insert_into(access_tokens::table)
         .values(&new_access_token)
-        .execute(conn)
-        .unwrap();
+        .execute(conn)?;
 
     cookies.add(
         Cookie::build(("access_token", token.clone()))
@@ -49,31 +52,41 @@ pub fn create(conn: &mut PgConnection, user_id: i32, cookies: Cookies) {
             .max_age(Duration::minutes(15))
             .build(),
     );
+    Ok(())
 }
 
 pub fn check(conn: &mut PgConnection, cookies: Cookies) -> Result<i32, StatusCode> {
     use self::access_tokens::dsl::*;
 
+    // Token aus Cookies extrahieren (bereits gut)
     let token = cookies
         .get("access_token")
         .and_then(|cookie| Some(cookie.value().to_string()))
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let access_token = access_tokens
+    // Token in DB suchen: Verwende ? für DB-Fehler und handle Option
+    let access_token_opt = access_tokens
         .filter(token_hash.eq(hash_cookie(token.clone())))
         .first::<AccessToken>(conn)
         .optional()
-        .unwrap()
-        .unwrap();
+        .map_err(db_error_to_status)?;
 
+    let access_token = match access_token_opt {
+        Some(token) => token,
+        None => return Err(StatusCode::UNAUTHORIZED), // Kein Token gefunden
+    };
+
+    // Ablauf prüfen
     if access_token.expires_at < Utc::now().naive_utc() {
+        // Token löschen: ? für DB-Fehler
         delete(access_tokens.filter(id.eq(access_token.id)))
             .execute(conn)
-            .unwrap();
+            .map_err(db_error_to_status)?;
+
         return Err(StatusCode::UNAUTHORIZED);
-    } else {
-        return Ok(access_token.user_id);
     }
+
+    Ok(access_token.user_id)
 }
 
 fn generate_secure_token(length: usize) -> String {
@@ -88,4 +101,11 @@ fn hash_cookie(cookie_token: String) -> String {
     let mut hasher = Sha256::new();
     hasher.update(&cookie_token);
     format!("{:x}", hasher.finalize())
+}
+
+fn db_error_to_status(err: diesel::result::Error) -> StatusCode {
+    match err {
+        diesel::result::Error::NotFound => StatusCode::NOT_FOUND,
+        _ => StatusCode::INTERNAL_SERVER_ERROR, // Oder spezifischere Codes je nach Fehler
+    }
 }

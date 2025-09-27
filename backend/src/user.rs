@@ -165,15 +165,18 @@ pub async fn login(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     match authenticate(&mut conn, &payload.email, &payload.password) {
-        Ok(Some(user)) => {
-            access_token::create(&mut conn, user.id, cookies);
-
-            Ok(Json(AuthResponse {
+        Ok(Some(user)) => match access_token::create(&mut conn, user.id, cookies) {
+            Ok(_) => Ok(Json(AuthResponse {
                 success: true,
                 message: "Login erfolgreich".to_string(),
                 user: Some(user.into()),
-            }))
-        }
+            })),
+            Err(_) => Ok(Json(AuthResponse {
+                success: false,
+                message: "Unerwarteter Datenbank Fehler".to_string(),
+                user: None,
+            })),
+        },
         Ok(None) => Ok(Json(AuthResponse {
             success: false,
             message: "Ungültige Anmeldedaten".to_string(),
