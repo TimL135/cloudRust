@@ -18,10 +18,11 @@ use tokio::{
     net::TcpListener,
     sync::{mpsc, Mutex},
 };
-use tower_cookies::{CookieManagerLayer};
+use tower_cookies::CookieManagerLayer;
 
 use tower_http::cors::{Any, CorsLayer};
 
+mod access_token;
 mod file;
 mod schema;
 mod user;
