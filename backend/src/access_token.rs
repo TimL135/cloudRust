@@ -2,7 +2,7 @@ use crate::schema::access_tokens::{self};
 use axum::http::StatusCode;
 use chrono::{Duration as ChronoDuration, NaiveDateTime, Utc};
 use diesel::{dsl::delete, prelude::*, Insertable, Queryable};
-use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
+use rand::{distr::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::Duration;
@@ -90,7 +90,7 @@ pub fn check(conn: &mut PgConnection, cookies: Cookies) -> Result<i32, StatusCod
 }
 
 fn generate_secure_token(length: usize) -> String {
-    OsRng
+    rand::rng()
         .sample_iter(&Alphanumeric)
         .take(length)
         .map(char::from)

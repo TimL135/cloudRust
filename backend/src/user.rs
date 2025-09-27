@@ -82,14 +82,6 @@ impl From<User> for UserResponse {
     }
 }
 
-#[derive(Insertable)]
-#[diesel(table_name = crate::schema::access_tokens)]
-pub struct NewAccessToken {
-    pub user_id: i32,
-    pub token_hash: String,
-    pub expires_at: NaiveDateTime,
-}
-
 pub struct AuthenticatedUser {
     pub user_id: i32,
     pub role: String,
@@ -188,12 +180,18 @@ pub async fn login(
 
 pub async fn register(
     State(state): State<Arc<AppState>>,
+    cookies: Cookies,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let mut conn = state
         .db
         .get()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let auth_user = authenticate_user_from_cookie(State(state.clone()), cookies).await?;
+
+    if auth_user.role != "admin" {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
 
     match create(&mut conn, &payload.name, &payload.email, &payload.password) {
         Ok(_) => Ok(StatusCode::OK),

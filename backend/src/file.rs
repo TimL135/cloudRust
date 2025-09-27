@@ -178,9 +178,7 @@ pub async fn list(
         .get()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let mut query = files::table.into_boxed();
-
-    query = query.filter(files::user_id.eq(user_id));
+    let query = files::table.into_boxed().filter(files::user_id.eq(user_id));
 
     let files_result: Vec<File> = query
         .order(files::created_at.desc())

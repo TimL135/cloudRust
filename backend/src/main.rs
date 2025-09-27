@@ -53,7 +53,7 @@ struct WsParams {
 async fn ws_handler(
     ws: WebSocketUpgrade,
     Query(params): Query<WsParams>,
-    State(clients): State<Clients>,
+    State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     // String zu i32 konvertieren
     let user_id: i32 = match params.user_id.parse() {
@@ -63,7 +63,7 @@ async fn ws_handler(
             return ws.on_upgrade(|_| async {}); // Leere Verbindung
         }
     };
-    ws.on_upgrade(move |socket| handle_socket(socket, user_id, clients))
+    ws.on_upgrade(move |socket| handle_socket(socket, user_id, state.clients.clone()))
 }
 
 async fn handle_socket(socket: WebSocket, user_id: i32, clients: Clients) {
@@ -113,11 +113,9 @@ async fn main() {
     let state = Arc::new(AppState { db: pool, clients });
     let app = Router::new()
         .route("/ws", get(ws_handler))
-        .with_state(state.clients.clone())
         .route("/api/auth/login", post(user::login))
         .route("/api/auth/auth_check", get(user::auth_check))
         .route("/api/auth/register", post(user::register))
-        // 📁 Upload Routes hinzufügen
         .route("/api/upload", post(file::upload))
         .route("/api/files", get(file::list))
         .route("/api/files/{id}/download", get(file::download))
