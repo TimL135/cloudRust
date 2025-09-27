@@ -1,13 +1,13 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
-    _sqlx_migrations (version) {
-        version -> Int8,
-        description -> Text,
-        installed_on -> Timestamptz,
-        success -> Bool,
-        checksum -> Bytea,
-        execution_time -> Int8,
+    access_tokens (id) {
+        id -> Int4,
+        user_id -> Int4,
+        token_hash -> Text,
+        expires_at -> Timestamp,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
     }
 }
 
@@ -47,6 +47,7 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(access_tokens -> users (user_id));
 diesel::joinable!(files -> users (user_id));
 
-diesel::allow_tables_to_appear_in_same_query!(_sqlx_migrations, files, users,);
+diesel::allow_tables_to_appear_in_same_query!(access_tokens, files, users,);

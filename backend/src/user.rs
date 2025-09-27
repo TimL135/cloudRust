@@ -1,13 +1,16 @@
 use axum::{extract::State, http::StatusCode, Json};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration as ChronoDuration, NaiveDateTime, Utc};
+use diesel::dsl::delete;
 use diesel::{prelude::*, AsChangeset, Insertable, Queryable};
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
+use crate::schema::access_tokens::{self};
 use crate::schema::users::{self, role};
-use crate::{AppState, Claims};
+use crate::AppState;
 use time::Duration;
 use tower_cookies::{Cookie, Cookies};
 
@@ -84,9 +87,35 @@ impl From<User> for UserResponse {
     }
 }
 
+#[derive(Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = crate::schema::access_tokens)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct AccessToken {
+    pub id: i32,
+    pub user_id: i32,
+    pub token_hash: String,
+    pub expires_at: NaiveDateTime,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = crate::schema::access_tokens)]
+pub struct NewAccessToken {
+    pub user_id: i32,
+    pub token_hash: String,
+    pub expires_at: NaiveDateTime,
+}
+
 pub struct AuthenticatedUser {
     pub user_id: i32,
     pub role: String,
+}
+
+fn hash_cookie(cookie_token: String) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(&cookie_token);
+    format!("{:x}", hasher.finalize())
 }
 
 // 🔐 Authentifizierungs-Funktion für Handler
@@ -94,31 +123,35 @@ pub async fn authenticate_user_from_cookie(
     State(state): State<Arc<AppState>>,
     cookies: Cookies,
 ) -> Result<AuthenticatedUser, StatusCode> {
+    use self::access_tokens::dsl::*;
+
+    let mut conn = state
+        .db
+        .get()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
     // 1️⃣ Access Token aus Cookie extrahieren
     let token = cookies
         .get("access_token")
         .and_then(|cookie| Some(cookie.value().to_string()))
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    // 2️⃣ JWT Token validieren
-    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "your-secret-key".to_string());
+    let access_token = access_tokens
+        .filter(token_hash.eq(hash_cookie(token.clone())))
+        .first::<AccessToken>(&mut conn)
+        .optional()
+        .unwrap()
+        .unwrap();
 
-    let token_data = decode::<Claims>(
-        &token,
-        &DecodingKey::from_secret(jwt_secret.as_ref()),
-        &Validation::new(Algorithm::HS256),
-    )
-    .map_err(|_| StatusCode::NOT_FOUND)?;
+    if access_token.expires_at < Utc::now().naive_utc() {
+        delete(access_tokens.filter(id.eq(access_token.id)))
+            .execute(&mut conn)
+            .unwrap();
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let _user_id = access_token.user_id;
 
-    let user_id = token_data.claims.user_id;
-
-    // 3️⃣ User aus DB laden und validieren
-    let mut conn = state
-        .db
-        .get()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let user = get_user_by_id(&mut conn, &user_id)
+    let user = get_user_by_id(&mut conn, &_user_id)
         .map_err(|_| StatusCode::NOT_FOUND)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
@@ -128,7 +161,7 @@ pub async fn authenticate_user_from_cookie(
     }
 
     Ok(AuthenticatedUser {
-        user_id,
+        user_id: _user_id,
         role: user.role,
     })
 }
@@ -163,6 +196,14 @@ pub async fn auth_check(
     }))
 }
 
+fn generate_secure_token(length: usize) -> String {
+    OsRng
+        .sample_iter(&Alphanumeric)
+        .take(length)
+        .map(char::from)
+        .collect()
+}
+
 pub async fn login(
     State(state): State<Arc<AppState>>,
     cookies: Cookies,
@@ -175,25 +216,22 @@ pub async fn login(
 
     match authenticate(&mut conn, &payload.email, &payload.password) {
         Ok(Some(user)) => {
-            // JWT Token erstellen
-            let token = create_jwt_token(user.id)?;
+            let token = generate_secure_token(64);
+            let new_access_token = NewAccessToken {
+                user_id: user.id,
+                token_hash: hash_cookie(token.clone()),
+                expires_at: (Utc::now() + ChronoDuration::minutes(15)).naive_utc(),
+            };
+            diesel::insert_into(access_tokens::table)
+                .values(&new_access_token)
+                .execute(&mut conn)
+                .unwrap();
 
             // 2. Cookie setzen (HttpOnly, Secure, SameSite)
             cookies.add(
                 Cookie::build(("access_token", token.clone()))
                     .http_only(true)
-                    .secure(false) // f�r localhost auf http=false lassen, PROD = true
-                    .same_site(tower_cookies::cookie::SameSite::Lax)
-                    .path("/")
-                    .max_age(Duration::minutes(15))
-                    .build(),
-            );
-
-            // 2. Cookie setzen (HttpOnly, Secure, SameSite)
-            cookies.add(
-                Cookie::build(("access_token", token.clone()))
-                    .http_only(true)
-                    .secure(false) // f�r localhost auf http=false lassen, PROD = true
+                    .secure(true)
                     .same_site(tower_cookies::cookie::SameSite::Lax)
                     .path("/")
                     .max_age(Duration::minutes(15))
@@ -228,22 +266,6 @@ pub async fn register(
         Ok(_) => Ok(StatusCode::OK),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
-}
-
-fn create_jwt_token(user_id: i32) -> Result<String, StatusCode> {
-    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "your-secret-key".to_string());
-
-    let claims = Claims {
-        user_id,
-        exp: (Utc::now() + ChronoDuration::hours(24)).timestamp() as usize,
-    };
-
-    encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(jwt_secret.as_ref()),
-    )
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 pub fn authenticate(
