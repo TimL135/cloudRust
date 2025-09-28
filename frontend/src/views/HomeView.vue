@@ -61,7 +61,7 @@
 </template>
 
 <script setup lang="ts">
-import { useAuthStore } from '@/stores/auth'
+import { createAndEncryptKeyPair, useAuthStore } from '@/stores/auth'
 import { useRouter } from 'vue-router'
 import Upload from "@/components/Upload.vue"
 import FilesView from '@/components/FilesView.vue'
@@ -72,6 +72,8 @@ interface NewUser {
   name: string
   email: string
   password: string
+  public_key: string
+  encrypted_private_key: string
 }
 
 interface UserErrors {
@@ -104,7 +106,9 @@ const snackbar = reactive<Snackbar>({
 const newUser = reactive<NewUser>({
   name: '',
   email: '',
-  password: ''
+  password: '',
+  public_key: '',
+  encrypted_private_key: '',
 })
 
 const errors = reactive<UserErrors>({
@@ -169,6 +173,9 @@ const createUser = async () => {
   loading.value = true
 
   try {
+    const { publicKey, encryptedPrivateKey } = await createAndEncryptKeyPair(newUser.password)
+    newUser.public_key = publicKey;
+    newUser.encrypted_private_key = encryptedPrivateKey
     apiRequest("/api/auth/register", {}, "POST", newUser)
 
     // Erfolg - Modal schließen

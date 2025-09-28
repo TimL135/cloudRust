@@ -39,6 +39,8 @@ diesel::table! {
         name -> Text,
         email -> Text,
         password_hash -> Text,
+        public_key -> Text,
+        encrypted_private_key -> Text,
         role -> Text,
         created_at -> Nullable<Timestamp>,
         updated_at -> Nullable<Timestamp>,

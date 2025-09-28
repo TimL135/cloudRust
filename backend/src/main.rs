@@ -3,6 +3,7 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Query, State,
     },
+    http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
     Router,
@@ -116,6 +117,7 @@ async fn main() {
         .route("/api/auth/login", post(user::login))
         .route("/api/auth/auth_check", get(user::auth_check))
         .route("/api/auth/register", post(user::register))
+        .route("/api/auth/update_keys", post(user::update_keys))
         .route("/api/upload", post(file::upload))
         .route("/api/files", get(file::list))
         .route("/api/files/{id}/download", get(file::download))
@@ -144,5 +146,12 @@ async fn main() {
             eprintln!("Server will now exit");
             std::process::exit(1);
         }
+    }
+}
+
+pub fn db_error_to_status(err: diesel::result::Error) -> StatusCode {
+    match err {
+        diesel::result::Error::NotFound => StatusCode::NOT_FOUND,
+        _ => StatusCode::INTERNAL_SERVER_ERROR, // Oder spezifischere Codes je nach Fehler
     }
 }

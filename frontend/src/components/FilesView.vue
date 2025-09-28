@@ -35,8 +35,7 @@
                             @click="downloadFile(item.id, item.original_filename)">
                             <v-icon>mdi-download</v-icon>
                         </v-btn>
-                          <v-btn icon color="error" variant="text"
-                            @click="showDeleteConfirmation(item)">
+                        <v-btn icon color="error" variant="text" @click="showDeleteConfirmation(item)">
                             <v-icon>mdi-delete</v-icon>
                         </v-btn>
                     </template>
@@ -74,8 +73,8 @@ import { apiRequest } from "@/api"
 import { ref, onMounted, computed } from "vue"
 
 interface FileItem {
-  id: number
-  original_filename: string
+    id: number
+    original_filename: string
 }
 const authStore = useAuthStore()
 
@@ -121,7 +120,7 @@ const headers = [
 
 // Files laden
 async function fetchFiles() {
-    console.log("fetchFiles")
+    return
     loading.value = true
     error.value = ""
     try {
@@ -166,7 +165,7 @@ async function deleteFile(id: number) {
     }
 }
 
-const showDeleteConfirmation = (item:FileItem) => {
+const showDeleteConfirmation = (item: FileItem) => {
     selectedFile.value = item
     deleteDialog.value = true
 }

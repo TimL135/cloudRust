@@ -1,4 +1,7 @@
-use crate::schema::access_tokens::{self};
+use crate::{
+    db_error_to_status,
+    schema::access_tokens::{self},
+};
 use axum::http::StatusCode;
 use chrono::{Duration as ChronoDuration, NaiveDateTime, Utc};
 use diesel::{dsl::delete, prelude::*, Insertable, Queryable};
@@ -37,7 +40,7 @@ pub fn create(
     let new_access_token = NewAccessToken {
         user_id,
         token_hash: hash_cookie(token.clone()),
-        expires_at: (Utc::now() + ChronoDuration::minutes(15)).naive_utc(),
+        expires_at: (Utc::now() + ChronoDuration::milliseconds(1500)).naive_utc(),
     };
     diesel::insert_into(access_tokens::table)
         .values(&new_access_token)
@@ -49,7 +52,7 @@ pub fn create(
             .secure(true)
             .same_site(tower_cookies::cookie::SameSite::Lax)
             .path("/")
-            .max_age(Duration::minutes(15))
+            .max_age(Duration::milliseconds(1500))
             .build(),
     );
     Ok(())
@@ -101,11 +104,4 @@ fn hash_cookie(cookie_token: String) -> String {
     let mut hasher = Sha256::new();
     hasher.update(&cookie_token);
     format!("{:x}", hasher.finalize())
-}
-
-fn db_error_to_status(err: diesel::result::Error) -> StatusCode {
-    match err {
-        diesel::result::Error::NotFound => StatusCode::NOT_FOUND,
-        _ => StatusCode::INTERNAL_SERVER_ERROR, // Oder spezifischere Codes je nach Fehler
-    }
 }
