@@ -50,8 +50,6 @@ pub struct RegisterRequest {
     pub name: String,
     pub email: String,
     pub password: String,
-    pub public_key: String,
-    pub encrypted_private_key: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -214,8 +212,8 @@ pub async fn register(
         &payload.name,
         &payload.email,
         &payload.password,
-        &payload.encrypted_private_key,
-        &payload.public_key,
+        "_encrzpted_private_key",
+        "_public_key",
     ) {
         Ok(_) => Ok(StatusCode::OK),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
