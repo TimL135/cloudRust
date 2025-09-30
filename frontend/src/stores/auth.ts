@@ -109,10 +109,10 @@ async function openDB(): Promise<IDBDatabase> {
 }
 
 // Speichern in IndexedDB
-async function saveToIndexedDB(id: string, privateKey: CryptoKey, publicKeyBase64: string) {
+async function saveToIndexedDB(id: string, privateKey: CryptoKey) {
   const db = await openDB();
   const tx = db.transaction(KEY_STORE, "readwrite");
-  tx.objectStore(KEY_STORE).put({ id, privateKey, publicKey: publicKeyBase64 });
+  tx.objectStore(KEY_STORE).put({ id, privateKey });
   return tx.oncomplete;
 }
 
@@ -187,7 +187,7 @@ export async function createHybridKeyPair(userId: string, password: string): Pro
   const publicKeyBase64 = arrayBufferToBase64(rawPublic);
 
   // Private Key in IndexedDB speichern (non-extractable, für Komfort)
-  await saveToIndexedDB(userId, keyPair.privateKey, publicKeyBase64);
+  await saveToIndexedDB(userId, keyPair.privateKey);
 
   // Private Key zusätzlich mit Passwort verschlüsseln (für Recovery / DB)
   const encryptedPrivateKey = await encryptPrivateKeyWithPassword(keyPair.privateKey, password);
@@ -209,7 +209,9 @@ async function loadUserPrivateKey(userId: string, encryptedPrivateKey: string, p
   // 2. Fallback: aus DB mit Passwort entschlüsseln
   if (password) {
     console.log("⚠️ Private Key nicht in IndexedDB → Entschlüsselung mit Passwort");
-    return await decryptPrivateKeyWithPassword(encryptedPrivateKey, password);
+    const private_key = await decryptPrivateKeyWithPassword(encryptedPrivateKey, password)
+    await saveToIndexedDB(userId, private_key)
+    return private_key;
   }
 
   throw new Error("Kein Private Key verfügbar (IndexedDB leer, Passwort nicht gegeben)");
@@ -253,4 +255,4 @@ async function testHybrid() {
 }
 
 // Test starten
-testHybrid();
+// testHybrid();
