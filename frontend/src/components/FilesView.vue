@@ -120,7 +120,6 @@ const headers = [
 
 // Files laden
 async function fetchFiles() {
-    return
     loading.value = true
     error.value = ""
     try {
