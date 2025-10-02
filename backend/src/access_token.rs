@@ -40,7 +40,7 @@ pub fn create(
     let new_access_token = NewAccessToken {
         user_id,
         token_hash: hash_cookie(token.clone()),
-        expires_at: (Utc::now() + ChronoDuration::minutes(2)).naive_utc(),
+        expires_at: (Utc::now() + ChronoDuration::minutes(20)).naive_utc(),
     };
     diesel::insert_into(access_tokens::table)
         .values(&new_access_token)
@@ -52,7 +52,7 @@ pub fn create(
             .secure(true)
             .same_site(tower_cookies::cookie::SameSite::Lax)
             .path("/")
-            .max_age(Duration::minutes(2))
+            .max_age(Duration::minutes(20))
             .build(),
     );
     Ok(())

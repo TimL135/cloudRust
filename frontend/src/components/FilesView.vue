@@ -68,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import { useAuthStore } from "@/stores/auth"
+import { base64ToArrayBuffer, decryptFileAsUser, loadFromIndexedDB, useAuthStore } from "@/stores/auth"
 import { apiRequest } from "@/api"
 import { ref, onMounted, computed } from "vue"
 
@@ -140,9 +140,20 @@ async function downloadFile(id: number, filename: string) {
     try {
         const res = await apiRequest(`/api/files/${id}/download`)
         if (!res.ok) throw new Error("Fehler beim Download")
+        const resClone = res.clone()
 
+        const json = await resClone.json()
         const blob = await res.blob()
-        const url = window.URL.createObjectURL(blob)
+        const public_key = json.public_key
+        const publicKeyCrypto = await crypto.subtle.importKey(
+            "raw",
+            base64ToArrayBuffer(public_key),
+            { name: "ECDH", namedCurve: "P-256" },
+            true,
+            []
+        );
+        const userKeys = await loadFromIndexedDB(authStore.user?.id + "")
+        const url = window.URL.createObjectURL(decryptFileAsUser(blob, authStore.user?.id + "", userKeys?.privateKey, publicKeyCrypto))
         const link = document.createElement("a")
         link.href = url
         link.setAttribute("download", filename)

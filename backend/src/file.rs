@@ -1,4 +1,5 @@
 use axum::{
+    body::Bytes,
     extract::{ws::Message, Multipart, Path, Query, State},
     http::StatusCode,
     response::Json,
@@ -21,6 +22,7 @@ pub struct File {
     pub user_id: i32,
     pub original_filename: String,
     pub stored_filename: String,
+    pub sender_public_key: String,
     pub file_path: String,
     pub file_size: i64,
     pub mime_type: Option<String>,
@@ -39,6 +41,7 @@ pub struct NewFile {
     pub file_path: String,
     pub file_size: i64,
     pub mime_type: Option<String>,
+    pub sender_public_key: String,
     pub file_hash: Option<String>,
     pub upload_status: String,
 }
@@ -48,6 +51,12 @@ pub struct UploadResponse {
     pub filename: String,
     pub size: i64,
     pub url: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DownloadResponse {
+    pub file: Vec<u8>,
+    pub public_key: String,
 }
 
 #[derive(Serialize)]
@@ -78,22 +87,54 @@ pub async fn upload(
     let user_id = 1; // TODO: aus Session/JWT
 
     let mut responses = Vec::new();
+    let mut current_file_data: Option<Bytes> = None;
+    let mut current_name: Option<String> = None;
+    let mut current_size: Option<i64> = None;
+    let mut current_type: Option<String> = None;
+    let mut current_sender_public_key: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?
     {
-        let name = field.name().unwrap_or("").to_string();
+        let field_name = field.name().unwrap_or("").to_string();
 
-        if name == "file" {
-            let filename = field.file_name().unwrap_or("unknown").to_string();
-            let content_type = field
-                .content_type()
-                .unwrap_or("application/octet-stream")
-                .to_string();
-            let data = field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+        match field_name.as_str() {
+            "file" => {
+                current_file_data = Some(field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?);
+            }
+            "name" => {
+                current_name = Some(field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?);
+            }
+            "size" => {
+                let size_str = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                current_size = size_str.parse().ok();
+            }
+            "type" => {
+                current_type = Some(field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?);
+            }
+            "sender_public_key" => {
+                current_sender_public_key =
+                    Some(field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?);
+            }
+            _ => {}
+        }
 
+        // Wenn wir alle 4 Felder haben, verarbeiten
+        if let (
+            Some(data),
+            Some(filename),
+            Some(_size),
+            Some(content_type),
+            Some(_current_sender_public_key),
+        ) = (
+            &current_file_data,
+            &current_name,
+            &current_size,
+            &current_type,
+            &current_sender_public_key,
+        ) {
             // unique filename generieren
             let ext = std::path::Path::new(&filename)
                 .extension()
@@ -106,14 +147,15 @@ pub async fn upload(
             fs::create_dir_all(upload_dir)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
             let mut hasher = Sha256::new();
-            hasher.update(&data);
+            hasher.update(data);
             let file_hash = format!("{:x}", hasher.finalize());
 
             let mut file = fs::File::create(&file_path)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            file.write_all(&data)
+            file.write_all(data)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -124,7 +166,8 @@ pub async fn upload(
                 stored_filename: stored_filename.clone(),
                 file_path: file_path.clone(),
                 file_size: data.len() as i64,
-                mime_type: Some(content_type),
+                mime_type: Some(content_type.clone()),
+                sender_public_key: _current_sender_public_key.to_string().clone(),
                 file_hash: Some(file_hash),
                 upload_status: "completed".into(),
             };
@@ -140,10 +183,16 @@ pub async fn upload(
 
             responses.push(UploadResponse {
                 id: file_record.id,
-                filename,
+                filename: filename.clone(),
                 size: file_record.file_size,
                 url: format!("/api/files/{}/download", file_record.id),
             });
+
+            // Reset für nächste Datei
+            current_file_data = None;
+            current_name = None;
+            current_size = None;
+            current_type = None;
         }
     }
 
@@ -214,7 +263,7 @@ pub async fn download(
     State(state): State<Arc<AppState>>,
     cookies: Cookies,
     Path(file_id): Path<i32>,
-) -> Result<Vec<u8>, StatusCode> {
+) -> Result<Json<DownloadResponse>, StatusCode> {
     let auth_user = authenticate_user_from_cookie(State(state.clone()), cookies.clone()).await?;
 
     let mut conn = state
@@ -235,7 +284,10 @@ pub async fn download(
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
 
-    Ok(file_data)
+    Ok(Json(DownloadResponse {
+        file: file_data,
+        public_key: file.sender_public_key,
+    }))
 }
 
 pub async fn delete(

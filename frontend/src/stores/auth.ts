@@ -25,6 +25,7 @@ export const useAuthStore = defineStore("auth", {
           let data = await res.json()
           this.user = data.user
           if (this.user) {
+            console.log(await loadFromIndexedDB(this.user.id + ""))
             return true
           }
           return false
@@ -93,10 +94,10 @@ const KEY_STORE = "keys";
 // ===========================================
 // DB + Helper
 // ===========================================
-function arrayBufferToBase64(buf: ArrayBuffer): string {
+export function arrayBufferToBase64(buf: ArrayBuffer): string {
   return btoa(String.fromCharCode(...new Uint8Array(buf)));
 }
-function base64ToArrayBuffer(str: string): ArrayBuffer {
+export function base64ToArrayBuffer(str: string): ArrayBuffer {
   return Uint8Array.from(atob(str), c => c.charCodeAt(0)).buffer;
 }
 async function openDB(): Promise<IDBDatabase> {
@@ -114,15 +115,15 @@ async function openDB(): Promise<IDBDatabase> {
 }
 
 // Speichern in IndexedDB
-async function saveToIndexedDB(id: string, privateKey: CryptoKey) {
+async function saveToIndexedDB(id: string, privateKey: CryptoKey, publicKey: string) {
   const db = await openDB();
   const tx = db.transaction(KEY_STORE, "readwrite");
-  tx.objectStore(KEY_STORE).put({ id, privateKey });
+  tx.objectStore(KEY_STORE).put({ id, privateKey, publicKey });
   return tx.oncomplete;
 }
 
 // Laden aus IndexedDB
-async function loadFromIndexedDB(id: string): Promise<{ privateKey: CryptoKey, publicKey: CryptoKey } | null> {
+export async function loadFromIndexedDB(id: string): Promise<{ privateKey: CryptoKey, publicKey: CryptoKey } | null> {
   const db = await openDB();
   const tx = db.transaction(KEY_STORE, "readonly");
   const req = tx.objectStore(KEY_STORE).get(id);
@@ -215,7 +216,7 @@ export async function createHybridKeyPair(userId: string, password: string): Pro
   const publicKeyBase64 = arrayBufferToBase64(rawPublic);
 
   // Private Key in IndexedDB speichern (non-extractable, für Komfort)
-  await saveToIndexedDB(userId, keyPair.privateKey);
+  await saveToIndexedDB(userId, keyPair.privateKey, publicKeyBase64);
 
   // Private Key zusätzlich mit Passwort verschlüsseln (für Recovery / DB)
   const encryptedPrivateKey = await encryptPrivateKeyWithPassword(keyPair.privateKey, password);
@@ -226,29 +227,31 @@ export async function createHybridKeyPair(userId: string, password: string): Pro
 // ===========================================
 // Hybrid Login: Cookie-Login (IndexedDB) + Fallback (Passwort)
 // ===========================================
-async function loadUserPrivateKey(userId: string, encryptedPrivateKey: string, password?: string): Promise<CryptoKey> {
+async function loadUserKeys(userId: string, publicKey: string, encryptedPrivateKey: string, password?: string): Promise<{
+  privateKey: CryptoKey;
+  publicKey: CryptoKey;
+}> {
   // 1. Versuche IndexedDB (Cookie-Login)
   const fromIndexedDB = await loadFromIndexedDB(userId);
   if (fromIndexedDB?.privateKey) {
     console.log("✅ Private Key aus IndexedDB geladen (kein Passwort nötig)");
-    return fromIndexedDB.privateKey;
+    return fromIndexedDB;
   }
 
   // 2. Fallback: aus DB mit Passwort entschlüsseln
   if (password) {
     console.log("⚠️ Private Key nicht in IndexedDB → Entschlüsselung mit Passwort");
     const private_key = await decryptPrivateKeyWithPassword(encryptedPrivateKey, password)
-    await saveToIndexedDB(userId, private_key)
-    return private_key;
+    await saveToIndexedDB(userId, private_key, publicKey)
+    const keyPair = await loadFromIndexedDB(userId);
+    if (keyPair?.privateKey && keyPair.publicKey)
+      return keyPair
+
   }
 
-  throw new Error("Kein Private Key verfügbar (IndexedDB leer, Passwort nicht gegeben)");
+  throw new Error("Kein Private Key und Public Key verfügbar (IndexedDB leer, Passwort nicht gegeben)");
 }
 
-export async function loadUserKeys(userId: string, encryptedPrivateKey: string,) {
-  const private_key = loadUserPrivateKey(userId, encryptedPrivateKey)
-
-}
 // Hilfsmethoden: wie in deinem Code (`arrayBufferToBase64` etc.)
 // Annahme: jeder User hat bereits ein Schlüsselpaar {publicKey, privateKey}
 
@@ -299,7 +302,7 @@ async function encryptKeyForUser(aesKey: CryptoKey, senderPrivateKey: CryptoKey,
 }
 
 // Entschlüsseln für User
-async function decryptKeyForUser(wrappedData: string, senderPublicKey: CryptoKey, userPrivateKey: CryptoKey): Promise<CryptoKey> {
+export async function decryptKeyForUser(wrappedData: string, senderPublicKey: CryptoKey, userPrivateKey: CryptoKey): Promise<CryptoKey> {
   const { wrappedKey, iv } = JSON.parse(wrappedData);
 
   const sharedSecret = await crypto.subtle.deriveKey(
@@ -349,7 +352,7 @@ async function encryptFile(file: File, aesKey: CryptoKey): Promise<EncryptedFile
 // ===========================================
 // Datei entschl�sseln
 // ===========================================
-async function decryptFile(
+export async function decryptFile(
   encryptedFile: EncryptedFile,
   aesKey: CryptoKey
 ): Promise<File> {
@@ -370,7 +373,7 @@ async function decryptFile(
 // ===========================================
 // Datei verschlüsseln für mehrere User
 // ===========================================
-interface MultiRecipientEncryptedFile {
+export interface MultiRecipientEncryptedFile {
   encryptedFile: EncryptedFile;
   wrappedKeys: Map<string, string>; // userId -> wrapped AES key
 }
@@ -409,7 +412,7 @@ export async function encryptFileForMultipleUsers(
 // ===========================================
 // Datei entschlüsseln als User
 // ===========================================
-async function decryptFileAsUser(
+export async function decryptFileAsUser(
   multiRecipientFile: MultiRecipientEncryptedFile,
   userId: string,
   userPrivateKey: CryptoKey,
@@ -567,4 +570,4 @@ export async function testFileEncryption() {
 }
 
 // Test ausf�hren
-testFileEncryption();
+// testFileEncryption();

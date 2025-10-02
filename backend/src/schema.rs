@@ -19,6 +19,8 @@ diesel::table! {
         original_filename -> Varchar,
         #[max_length = 255]
         stored_filename -> Varchar,
+        #[max_length = 255]
+        sender_public_key -> Varchar,
         #[max_length = 500]
         file_path -> Varchar,
         file_size -> Int8,

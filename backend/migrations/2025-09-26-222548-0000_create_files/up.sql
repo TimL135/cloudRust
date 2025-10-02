@@ -6,6 +6,7 @@ CREATE TABLE files (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     original_filename VARCHAR(255) NOT NULL,
     stored_filename VARCHAR(255) NOT NULL,
+    sender_public_key VARCHAR(255) NOT NULL,
     file_path VARCHAR(500) NOT NULL,
     file_size BIGINT NOT NULL,
     mime_type VARCHAR(100),

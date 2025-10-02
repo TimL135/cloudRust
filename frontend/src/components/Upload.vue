@@ -63,17 +63,20 @@
 </template>
 
 <script setup lang="ts">
-import {  ref } from "vue";
+import { arrayBufferToBase64, base64ToArrayBuffer, encryptFileForMultipleUsers, MultiRecipientEncryptedFile, useAuthStore } from "@/stores/auth";
+import { ref } from "vue";
 
 interface UploadFile {
     name: string;
     size: number;
     type: string;
-    file: File;
+    sender_public_key: string;
+    file: MultiRecipientEncryptedFile;
 }
 
 const files = ref<UploadFile[]>([]);
 const isDragOver = ref(false);
+const authStore = useAuthStore()
 
 const handleDrop = (e: DragEvent) => {
     e.preventDefault();
@@ -88,13 +91,28 @@ const handleFileSelect = (e: Event) => {
     if (target.files) addFiles(Array.from(target.files));
 };
 
-const addFiles = (list: File[]) => {
-    list.forEach((f) => {
+const addFiles = async (list: File[]) => {
+    const keyPair = await crypto.subtle.generateKey(
+        { name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey", "deriveBits"]
+    );
+    const rawPublic = await crypto.subtle.exportKey("raw", keyPair.publicKey);
+    const publicKeyBase64 = arrayBufferToBase64(rawPublic);
+    const userArray = [{
+        userId: authStore.user!.id + "", publicKey: await crypto.subtle.importKey(
+            "raw",
+            base64ToArrayBuffer(authStore.user!.public_key + ""),
+            { name: "ECDH", namedCurve: "P-256" },
+            true,
+            []
+        )
+    }]
+    list.forEach(async (f) => {
         const file: UploadFile = {
             name: f.name,
             size: f.size,
             type: f.type,
-            file: f,
+            sender_public_key: publicKeyBase64,
+            file: await encryptFileForMultipleUsers(f, keyPair.privateKey, userArray),
         };
         files.value.push(file);
     });
@@ -117,7 +135,11 @@ const uploadFiles = async () => {
     // FormData zusammenbauen
     const formData = new FormData()
     for (const file of files.value) {
-        formData.append("file", file.file) // muss "file" heißen, wie im Backend
+        formData.append("file", file.file.encryptedFile.encryptedData) // muss "file" heißen, wie im Backend
+        formData.append("name", file.name)
+        formData.append("size", file.size + "")
+        formData.append("type", file.type)
+        formData.append("sender_public_key", file.sender_public_key)
     }
 
     // API Call machen
