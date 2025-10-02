@@ -32,14 +32,14 @@
             <v-list v-if="files.length > 0" lines="two">
                 <v-list-item v-for="(file, i) in files" :key="i" rounded="lg" class="mb-2">
                     <template #prepend>
-                        <v-avatar :color="getFileColor(file.type)" size="40">
-                            <v-icon color="white">{{ getFileIcon(file.type) }}</v-icon>
+                        <v-avatar :color="getFileColor(file.file.encryptedFile.fileType)" size="40">
+                            <v-icon color="white">{{ getFileIcon(file.file.encryptedFile.fileType) }}</v-icon>
                         </v-avatar>
                     </template>
 
-                    <v-list-item-title>{{ file.name }}</v-list-item-title>
+                    <v-list-item-title>{{ file.file.encryptedFile.fileName }}</v-list-item-title>
                     <v-list-item-subtitle>
-                        {{ formatFileSize(file.size) }}
+                        {{ formatFileSize(file.file.encryptedFile.fileSize) }}
                     </v-list-item-subtitle>
 
                     <template #append>
@@ -63,13 +63,10 @@
 </template>
 
 <script setup lang="ts">
-import { arrayBufferToBase64, base64ToArrayBuffer, encryptFileForMultipleUsers, MultiRecipientEncryptedFile, useAuthStore } from "@/stores/auth";
+import { arrayBufferToBase64, base64ToArrayBuffer, EncryptedFile, encryptFileForMultipleUsers, MultiRecipientEncryptedFile, useAuthStore } from "@/stores/auth";
 import { ref } from "vue";
 
 interface UploadFile {
-    name: string;
-    size: number;
-    type: string;
     sender_public_key: string;
     file: MultiRecipientEncryptedFile;
 }
@@ -90,7 +87,9 @@ const handleFileSelect = (e: Event) => {
     const target = e.target as HTMLInputElement;
     if (target.files) addFiles(Array.from(target.files));
 };
-
+function mapToObject(map: Map<string, string>): Record<string, string> {
+    return Object.fromEntries(map);
+}
 const addFiles = async (list: File[]) => {
     const keyPair = await crypto.subtle.generateKey(
         { name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey", "deriveBits"]
@@ -107,12 +106,13 @@ const addFiles = async (list: File[]) => {
         )
     }]
     list.forEach(async (f) => {
+        console.log("f")
+        let encryptedFile = await encryptFileForMultipleUsers(f, keyPair.privateKey, userArray)
+        console.log(mapToObject(encryptedFile.wrappedKeys))
+        encryptedFile.wrappedKeys = mapToObject(encryptedFile.wrappedKeys)
         const file: UploadFile = {
-            name: f.name,
-            size: f.size,
-            type: f.type,
             sender_public_key: publicKeyBase64,
-            file: await encryptFileForMultipleUsers(f, keyPair.privateKey, userArray),
+            file: encryptedFile,
         };
         files.value.push(file);
     });
@@ -135,10 +135,12 @@ const uploadFiles = async () => {
     // FormData zusammenbauen
     const formData = new FormData()
     for (const file of files.value) {
-        formData.append("file", file.file.encryptedFile.encryptedData) // muss "file" heißen, wie im Backend
-        formData.append("name", file.name)
-        formData.append("size", file.size + "")
-        formData.append("type", file.type)
+        console.log(file.file.wrappedKeys)
+        console.log(JSON.stringify(file.file))
+        formData.append("file", JSON.stringify({
+            ...file.file,
+            wrappedKeys: file.file.wrappedKeys
+        }));
         formData.append("sender_public_key", file.sender_public_key)
     }
 

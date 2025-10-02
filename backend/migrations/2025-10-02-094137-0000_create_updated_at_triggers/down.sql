@@ -5,6 +5,7 @@
 DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 DROP TRIGGER IF EXISTS update_files_updated_at ON files;
 DROP TRIGGER IF EXISTS update_access_tokens_updated_at ON access_tokens;
+DROP Trigger IF EXISTS update_wrapped_keys_updated_at ON wrapped_keys;
 
 -- Entferne die Trigger-Funktion
 DROP FUNCTION IF EXISTS update_updated_at_column();

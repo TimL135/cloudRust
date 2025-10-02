@@ -4,6 +4,7 @@ use axum::{
     http::StatusCode,
     response::Json,
 };
+use base64::{engine::general_purpose, Engine as _};
 use chrono::{NaiveDateTime, Utc};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,7 @@ use tokio::{fs, io::AsyncWriteExt};
 use tower_cookies::Cookies;
 use uuid::Uuid;
 
+use crate::schema::wrapped_keys;
 use crate::{schema::files, user::authenticate_user_from_cookie, AppState};
 #[derive(Queryable, Serialize, Clone)]
 #[diesel(table_name = files)]
@@ -22,11 +24,11 @@ pub struct File {
     pub user_id: i32,
     pub original_filename: String,
     pub stored_filename: String,
-    pub sender_public_key: String,
     pub file_path: String,
     pub file_size: i64,
     pub mime_type: Option<String>,
     pub file_hash: Option<String>,
+    pub iv: String,
     pub upload_status: Option<String>,
     pub created_at: Option<NaiveDateTime>,
     pub updated_at: Option<NaiveDateTime>,
@@ -40,9 +42,9 @@ pub struct NewFile {
     pub stored_filename: String,
     pub file_path: String,
     pub file_size: i64,
-    pub mime_type: Option<String>,
-    pub sender_public_key: String,
-    pub file_hash: Option<String>,
+    pub mime_type: String,
+    pub file_hash: String,
+    pub iv: String,
     pub upload_status: String,
 }
 #[derive(Serialize)]
@@ -56,7 +58,8 @@ pub struct UploadResponse {
 #[derive(Debug, Serialize)]
 pub struct DownloadResponse {
     pub file: Vec<u8>,
-    pub public_key: String,
+    pub file_iv: String,
+    pub wrapped_key: WrappedKey,
 }
 
 #[derive(Serialize)]
@@ -80,6 +83,56 @@ pub struct FileQuery {
     pub limit: Option<i64>,
 }
 
+use std::collections::HashMap;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct EncryptedFile {
+    #[serde(rename = "encryptedData")]
+    encrypted_data: String,
+    iv: String,
+    #[serde(rename = "fileName")]
+    file_name: String,
+    #[serde(rename = "fileType")]
+    file_type: String,
+    #[serde(rename = "fileSize")]
+    file_size: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct MultiRecipientEncryptedFile {
+    #[serde(rename = "encryptedFile")]
+    encrypted_file: EncryptedFile,
+    #[serde(rename = "wrappedKeys")]
+    wrapped_keys: HashMap<String, String>,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = wrapped_keys)]
+struct NewWrappedKey {
+    user_id: i32,
+    file_id: i32,
+    wrapped_key: String,
+    public_key: String,
+}
+#[derive(Debug, Deserialize)]
+struct WrappedKeyValue {
+    #[serde(rename = "wrappedKey")]
+    wrapped_key: String,
+    iv: String,
+}
+
+#[derive(Queryable, Selectable, Debug, Serialize)]
+#[diesel(table_name = wrapped_keys)]
+pub struct WrappedKey {
+    pub id: i32,
+    pub user_id: i32,
+    pub file_id: i32,
+    pub wrapped_key: String,
+    pub public_key: String,
+    pub created_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::NaiveDateTime,
+}
+
 pub async fn upload(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
@@ -87,12 +140,8 @@ pub async fn upload(
     let user_id = 1; // TODO: aus Session/JWT
 
     let mut responses = Vec::new();
-    let mut current_file_data: Option<Bytes> = None;
-    let mut current_name: Option<String> = None;
-    let mut current_size: Option<i64> = None;
-    let mut current_type: Option<String> = None;
+    let mut current_file_json: Option<String> = None;
     let mut current_sender_public_key: Option<String> = None;
-
     while let Some(field) = multipart
         .next_field()
         .await
@@ -102,17 +151,7 @@ pub async fn upload(
 
         match field_name.as_str() {
             "file" => {
-                current_file_data = Some(field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?);
-            }
-            "name" => {
-                current_name = Some(field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?);
-            }
-            "size" => {
-                let size_str = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
-                current_size = size_str.parse().ok();
-            }
-            "type" => {
-                current_type = Some(field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?);
+                current_file_json = Some(field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?);
             }
             "sender_public_key" => {
                 current_sender_public_key =
@@ -121,22 +160,21 @@ pub async fn upload(
             _ => {}
         }
 
-        // Wenn wir alle 4 Felder haben, verarbeiten
-        if let (
-            Some(data),
-            Some(filename),
-            Some(_size),
-            Some(content_type),
-            Some(_current_sender_public_key),
-        ) = (
-            &current_file_data,
-            &current_name,
-            &current_size,
-            &current_type,
-            &current_sender_public_key,
-        ) {
+        // Wenn wir beide Felder haben, verarbeiten
+        if let (Some(file_json), Some(sender_key)) =
+            (&current_file_json, &current_sender_public_key)
+        {
+            // JSON parsen
+            let encrypted_file: MultiRecipientEncryptedFile =
+                serde_json::from_str(file_json).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+            // Base64 dekodieren für Speicherung
+            let encrypted_data_bytes = general_purpose::STANDARD
+                .decode(&encrypted_file.encrypted_file.encrypted_data)
+                .map_err(|_| StatusCode::BAD_REQUEST)?;
+
             // unique filename generieren
-            let ext = std::path::Path::new(&filename)
+            let ext = std::path::Path::new(&encrypted_file.encrypted_file.file_name)
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("");
@@ -148,27 +186,29 @@ pub async fn upload(
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+            // Hash berechnen
             let mut hasher = Sha256::new();
-            hasher.update(data);
+            hasher.update(&encrypted_data_bytes);
             let file_hash = format!("{:x}", hasher.finalize());
 
+            // Verschlüsselte Datei speichern
             let mut file = fs::File::create(&file_path)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            file.write_all(data)
+            file.write_all(&encrypted_data_bytes)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
             // DB Insert
             let new_file = NewFile {
                 user_id,
-                original_filename: filename.clone(),
+                original_filename: encrypted_file.encrypted_file.file_name.clone(),
                 stored_filename: stored_filename.clone(),
                 file_path: file_path.clone(),
-                file_size: data.len() as i64,
-                mime_type: Some(content_type.clone()),
-                sender_public_key: _current_sender_public_key.to_string().clone(),
-                file_hash: Some(file_hash),
+                file_size: encrypted_file.encrypted_file.file_size,
+                mime_type: encrypted_file.encrypted_file.file_type.clone(),
+                file_hash: file_hash,
+                iv: encrypted_file.encrypted_file.iv,
                 upload_status: "completed".into(),
             };
 
@@ -179,20 +219,41 @@ pub async fn upload(
             let file_record: File = diesel::insert_into(files::table)
                 .values(&new_file)
                 .get_result(&mut conn)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                .map_err(|e| {
+                    eprintln!("Database error: {:?}", e);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+            println!("safe in db");
+            // Wrapped Keys speichern
+            for (recipient_user_id, wrapped_key_json) in encrypted_file.wrapped_keys {
+                // JSON parsen
+
+                let new_wrapped_key = NewWrappedKey {
+                    user_id: recipient_user_id.parse::<i32>().unwrap_or(user_id),
+                    file_id: file_record.id,
+                    wrapped_key: wrapped_key_json,
+                    public_key: sender_key.clone(),
+                };
+
+                diesel::insert_into(wrapped_keys::table)
+                    .values(&new_wrapped_key)
+                    .execute(&mut conn)
+                    .map_err(|e| {
+                        eprintln!("Database error inserting wrapped key: {:?}", e);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    })?;
+            }
 
             responses.push(UploadResponse {
                 id: file_record.id,
-                filename: filename.clone(),
+                filename: encrypted_file.encrypted_file.file_name.clone(),
                 size: file_record.file_size,
                 url: format!("/api/files/{}/download", file_record.id),
             });
 
             // Reset für nächste Datei
-            current_file_data = None;
-            current_name = None;
-            current_size = None;
-            current_type = None;
+            current_file_json = None;
+            current_sender_public_key = None;
         }
     }
 
@@ -283,10 +344,16 @@ pub async fn download(
     let file_data = fs::read(&file.file_path)
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
+    let wrapped_key = wrapped_keys::table
+        .filter(wrapped_keys::file_id.eq(file.id))
+        .filter(wrapped_keys::user_id.eq(auth_user.user_id))
+        .first::<WrappedKey>(&mut conn)
+        .map_err(|_| StatusCode::NOT_FOUND)?;
 
     Ok(Json(DownloadResponse {
         file: file_data,
-        public_key: file.sender_public_key,
+        file_iv: file.iv,
+        wrapped_key,
     }))
 }
 

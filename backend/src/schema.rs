@@ -19,8 +19,6 @@ diesel::table! {
         original_filename -> Varchar,
         #[max_length = 255]
         stored_filename -> Varchar,
-        #[max_length = 255]
-        sender_public_key -> Varchar,
         #[max_length = 500]
         file_path -> Varchar,
         file_size -> Int8,
@@ -28,6 +26,8 @@ diesel::table! {
         mime_type -> Nullable<Varchar>,
         #[max_length = 64]
         file_hash -> Nullable<Varchar>,
+        #[max_length = 255]
+        iv -> Varchar,
         #[max_length = 20]
         upload_status -> Nullable<Varchar>,
         created_at -> Nullable<Timestamptz>,
@@ -51,7 +51,23 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    wrapped_keys (id) {
+        id -> Int4,
+        user_id -> Int4,
+        file_id -> Int4,
+        #[max_length = 255]
+        wrapped_key -> Varchar,
+        #[max_length = 255]
+        public_key -> Varchar,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+    }
+}
+
 diesel::joinable!(access_tokens -> users (user_id));
 diesel::joinable!(files -> users (user_id));
+diesel::joinable!(wrapped_keys -> files (file_id));
+diesel::joinable!(wrapped_keys -> users (user_id));
 
-diesel::allow_tables_to_appear_in_same_query!(access_tokens, files, users,);
+diesel::allow_tables_to_appear_in_same_query!(access_tokens, files, users, wrapped_keys,);

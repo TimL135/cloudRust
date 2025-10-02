@@ -25,3 +25,8 @@ CREATE TRIGGER update_access_tokens_updated_at
     BEFORE UPDATE ON access_tokens
     FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_wrapped_keys_updated_at 
+    BEFORE UPDATE ON wrapped_keys
+    FOR EACH ROW 
+    EXECUTE FUNCTION update_updated_at_column();

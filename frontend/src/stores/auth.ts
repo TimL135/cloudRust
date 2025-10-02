@@ -25,7 +25,6 @@ export const useAuthStore = defineStore("auth", {
           let data = await res.json()
           this.user = data.user
           if (this.user) {
-            console.log(await loadFromIndexedDB(this.user.id + ""))
             return true
           }
           return false
@@ -80,7 +79,7 @@ interface EncryptedKeyPair {
   encryptedPrivateKey: string; // Passwort-verschlüsselter PKCS#8 Private Key
 }
 
-interface EncryptedFile {
+export interface EncryptedFile {
   encryptedData: string;      // Base64 verschlüsselte Datei
   iv: string;                 // Base64 IV
   fileName: string;           // Original Dateiname
@@ -224,34 +223,6 @@ export async function createHybridKeyPair(userId: string, password: string): Pro
   return { publicKey: publicKeyBase64, encryptedPrivateKey };
 }
 
-// ===========================================
-// Hybrid Login: Cookie-Login (IndexedDB) + Fallback (Passwort)
-// ===========================================
-async function loadUserKeys(userId: string, publicKey: string, encryptedPrivateKey: string, password?: string): Promise<{
-  privateKey: CryptoKey;
-  publicKey: CryptoKey;
-}> {
-  // 1. Versuche IndexedDB (Cookie-Login)
-  const fromIndexedDB = await loadFromIndexedDB(userId);
-  if (fromIndexedDB?.privateKey) {
-    console.log("✅ Private Key aus IndexedDB geladen (kein Passwort nötig)");
-    return fromIndexedDB;
-  }
-
-  // 2. Fallback: aus DB mit Passwort entschlüsseln
-  if (password) {
-    console.log("⚠️ Private Key nicht in IndexedDB → Entschlüsselung mit Passwort");
-    const private_key = await decryptPrivateKeyWithPassword(encryptedPrivateKey, password)
-    await saveToIndexedDB(userId, private_key, publicKey)
-    const keyPair = await loadFromIndexedDB(userId);
-    if (keyPair?.privateKey && keyPair.publicKey)
-      return keyPair
-
-  }
-
-  throw new Error("Kein Private Key und Public Key verfügbar (IndexedDB leer, Passwort nicht gegeben)");
-}
-
 // Hilfsmethoden: wie in deinem Code (`arrayBufferToBase64` etc.)
 // Annahme: jeder User hat bereits ein Schlüsselpaar {publicKey, privateKey}
 
@@ -286,43 +257,43 @@ async function encryptKeyForUser(aesKey: CryptoKey, senderPrivateKey: CryptoKey,
   const sharedSecret = await crypto.subtle.deriveKey(
     { name: "ECDH", public: userPublicKey },
     senderPrivateKey,
-    { name: "AES-GCM", length: 256 }, // direkt Ableitung als AES
+    { name: "AES-KW", length: 256 }, // direkt Ableitung als AES
     true,
-    ["wrapKey", "unwrapKey"]
+    ["wrapKey"]
   );
-
   // wrapKey = AES-Key verschlüsseln
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const wrapped = await crypto.subtle.wrapKey("raw", aesKey, sharedSecret, { name: "AES-GCM", iv });
+  const wrapped = await crypto.subtle.wrapKey("raw", aesKey, sharedSecret, { name: "AES-KW" });
 
-  return JSON.stringify({
-    wrappedKey: arrayBufferToBase64(wrapped),
-    iv: arrayBufferToBase64(iv.buffer)
-  });
+  return arrayBufferToBase64(wrapped)
 }
 
-// Entschlüsseln für User
-export async function decryptKeyForUser(wrappedData: string, senderPublicKey: CryptoKey, userPrivateKey: CryptoKey): Promise<CryptoKey> {
-  const { wrappedKey, iv } = JSON.parse(wrappedData);
+export async function decryptKeyForUser(
+  wrappedKeyBase64: string,
+  senderPublicKey: CryptoKey,
+  userPrivateKey: CryptoKey
+): Promise<CryptoKey> {
 
   const sharedSecret = await crypto.subtle.deriveKey(
     { name: "ECDH", public: senderPublicKey },
     userPrivateKey,
-    { name: "AES-GCM", length: 256 },
+    { name: "AES-KW", length: 256 },
     true,
-    ["wrapKey", "unwrapKey"]
+    ["unwrapKey"]
   );
+  console.log("wrappedKeyBase64")
+  console.log(JSON.parse(wrappedKeyBase64).wrappedKey)
+  console.log(JSON.parse(wrappedKeyBase64).wrappedKey.wrapped_key)
 
   const aesKey = await crypto.subtle.unwrapKey(
     "raw",
-    base64ToArrayBuffer(wrappedKey),
+    base64ToArrayBuffer(JSON.parse(wrappedKeyBase64).wrappedKey.wrapped_key),
     sharedSecret,
-    { name: "AES-GCM", iv: base64ToArrayBuffer(iv) },
+    "AES-KW", // kein IV!
     { name: "AES-GCM", length: 256 },
     true,
     ["encrypt", "decrypt"]
   );
-
+  console.log("return" + aesKey)
   return aesKey;
 }
 
@@ -350,25 +321,35 @@ async function encryptFile(file: File, aesKey: CryptoKey): Promise<EncryptedFile
 }
 
 // ===========================================
-// Datei entschl�sseln
+// Datei entschlüsseln (FIXED)
 // ===========================================
 export async function decryptFile(
   encryptedFile: EncryptedFile,
-  aesKey: CryptoKey
+  aesKey: CryptoKey,
+  iv: string,
 ): Promise<File> {
-  // Entschl�sseln
+  console.log("decryptFile input", encryptedFile);
+
+  // 1. IV prüfen
+  const ivBuffer = base64ToArrayBuffer(iv);
+  console.log("IV Bytes:", ivBuffer.byteLength); // sollte 12 sein
+
+  // 2. Encrypted Data von Base64 -> ArrayBuffer
+  const encryptedBuffer = base64ToArrayBuffer(encryptedFile.encryptedFile.encryptedData);
+  console.log(ivBuffer)
+  console.log(aesKey)
+  console.log(encryptedBuffer)
+  // 3. Entschlüsseln
   const decryptedData = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: base64ToArrayBuffer(encryptedFile.iv) },
+    { name: "AES-GCM", iv: ivBuffer },
     aesKey,
-    base64ToArrayBuffer(encryptedFile.encryptedData)
+    encryptedBuffer
   );
 
-  // Als File-Objekt zur�ckgeben
-  return new File(
-    [decryptedData],
-    encryptedFile.fileName,
-    { type: encryptedFile.fileType }
-  );
+  // 4. Neues File-Objekt erzeugen
+  return new File([decryptedData], encryptedFile.fileName, {
+    type: encryptedFile.fileType,
+  });
 }
 // ===========================================
 // Datei verschlüsseln für mehrere User
@@ -414,26 +395,27 @@ export async function encryptFileForMultipleUsers(
 // ===========================================
 export async function decryptFileAsUser(
   multiRecipientFile: MultiRecipientEncryptedFile,
-  userId: string,
   userPrivateKey: CryptoKey,
-  senderPublicKey: CryptoKey
+  senderPublicKey: CryptoKey,
+  wrappedKey: string,
+  file_iv: string,
 ): Promise<File> {
 
-  console.log(`🔓 User "${userId}" entschlüsselt Datei...`);
+  console.log(`🔓 entschlüsselt Datei...`);
+  console.log(wrappedKey)
+  console.log(senderPublicKey)
+  console.log(userPrivateKey)
 
-  // 1. Wrapped Key für diesen User holen
-  const wrappedKey = multiRecipientFile.wrappedKeys.get(userId);
-  if (!wrappedKey) {
-    throw new Error(`❌ Kein Key für User "${userId}" gefunden!`);
-  }
   // 2. AES-Key entschlüsseln
   const aesKey = await decryptKeyForUser(
     wrappedKey,
     senderPublicKey,
     userPrivateKey
   );
+  console.log("test")
+  console.log(multiRecipientFile)
   // 3. Datei entschlüsseln
-  const decryptedFile = await decryptFile(multiRecipientFile.encryptedFile, aesKey);
+  const decryptedFile = await decryptFile(multiRecipientFile, aesKey, file_iv);
   console.log(`✅ Datei entschlüsselt: "${decryptedFile.name}"`);
 
   return decryptedFile;
@@ -474,100 +456,9 @@ async function addRecipientToEncryptedFile(
 
   // 3. Zur Map hinzufügen
   multiRecipientFile.wrappedKeys.set(newRecipient.userId, newWrappedKey);
+  console.log(multiRecipientFile.wrappedKeys)
 
   // WICHTIG: Wir müssen auch den "Sender Public Key" für Carol speichern!
   // Sonst kann Carol nicht entschlüsseln, weil sie nicht weiß, wer der Sender war
   console.log(`✅ User "${newRecipient.userId}" hinzugefügt!`);
 }
-
-// ===========================================
-// TEST FUNCTION f�r Dateien
-// ===========================================
-export async function testFileEncryption() {
-  console.log("\U0001f4c1 Multi-Recipient File Encryption Test\n");
-
-  // 1. Schl�sselpaare erstellen
-  console.log("\U0001f464 Erstelle Schl�sselpaare...");
-  const aliceKeyPair = await crypto.subtle.generateKey(
-    { name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey", "deriveBits"]
-  );
-  const bobKeyPair = await crypto.subtle.generateKey(
-    { name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey", "deriveBits"]
-  );
-  const carolKeyPair = await crypto.subtle.generateKey(
-    { name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey", "deriveBits"]
-  );
-  const senderKeyPair = await crypto.subtle.generateKey(
-    { name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey", "deriveBits"]
-  );
-
-  // 2. Test-Datei erstellen (simuliert)
-  const testContent = "Dies ist eine geheime Datei! \U0001f512\nMit mehreren Zeilen.\nUnd Emojis \U0001f389";
-  const testFile = new File([testContent], "secret.txt", { type: "text/plain" });
-  console.log(`\n\U0001f4c4 Test-Datei: "${testFile.name}" (${testFile.size} bytes)\n`);
-
-  // 3. Datei f�r Alice und Bob verschl�sseln
-  const encryptedFile = await encryptFileForMultipleUsers(
-    testFile,
-    senderKeyPair.privateKey,
-    [
-      { userId: "alice", publicKey: aliceKeyPair.publicKey },
-      { userId: "bob", publicKey: bobKeyPair.publicKey }
-    ]
-  );
-  console.log("\n");
-
-  // 4. Alice entschl�sselt
-  const aliceFile = await decryptFileAsUser(
-    encryptedFile,
-    "alice",
-    aliceKeyPair.privateKey,
-    senderKeyPair.publicKey
-  );
-  const aliceContent = await aliceFile.text();
-  console.log(`   \U0001f4d6 Alice liest: "${aliceContent.substring(0, 40)}..."\n`);
-
-  // 5. Bob entschl�sselt
-  const bobFile = await decryptFileAsUser(
-    encryptedFile,
-    "bob",
-    bobKeyPair.privateKey,
-    senderKeyPair.publicKey
-  );
-  const bobContent = await bobFile.text();
-  console.log(`   \U0001f4d6 Bob liest: "${bobContent.substring(0, 40)}..."\n`);
-
-  // 6. Bob f�gt Carol hinzu
-  console.log("\U0001f465 Bob f�gt Carol als neue Empf�ngerin hinzu...");
-  await addRecipientToEncryptedFile(
-    encryptedFile,
-    { userId: "carol", publicKey: carolKeyPair.publicKey },
-    bobKeyPair.privateKey,
-    senderKeyPair.publicKey,
-    "bob"
-  );
-  console.log("\n");
-
-  // 7. Carol entschl�sselt
-  const carolFile = await decryptFileAsUser(
-    encryptedFile,
-    "carol",
-    carolKeyPair.privateKey,
-    bobKeyPair.publicKey
-  );
-  const carolContent = await carolFile.text();
-  console.log(`   \U0001f4d6 Carol liest: "${carolContent.substring(0, 40)}..."\n`);
-
-  // 8. Verifikation
-  if (aliceContent === testContent && bobContent === testContent && carolContent === testContent) {
-    console.log("\U0001f389 SUCCESS! Alle User konnten die Datei korrekt entschl�sseln!");
-    console.log("\u2705 Auch das Hinzuf�gen eines neuen Users (Carol) hat funktioniert!");
-    return true;
-  } else {
-    console.error("\u274c FEHLER!");
-    return false;
-  }
-}
-
-// Test ausf�hren
-// testFileEncryption();

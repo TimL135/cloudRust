@@ -68,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import { base64ToArrayBuffer, decryptFileAsUser, loadFromIndexedDB, useAuthStore } from "@/stores/auth"
+import { arrayBufferToBase64, base64ToArrayBuffer, decryptFileAsUser, loadFromIndexedDB, useAuthStore } from "@/stores/auth"
 import { apiRequest } from "@/api"
 import { ref, onMounted, computed } from "vue"
 
@@ -138,31 +138,63 @@ async function fetchFiles() {
 // File Download
 async function downloadFile(id: number, filename: string) {
     try {
-        const res = await apiRequest(`/api/files/${id}/download`)
-        if (!res.ok) throw new Error("Fehler beim Download")
-        const resClone = res.clone()
+        const res = await apiRequest(`/api/files/${id}/download`);
+        if (!res.ok) throw new Error("Fehler beim Download");
 
-        const json = await resClone.json()
-        const blob = await res.blob()
-        const public_key = json.public_key
-        const publicKeyCrypto = await crypto.subtle.importKey(
+        const json: any = await res.json();
+        console.log("Download JSON:", json);
+
+        // 1. File-Bytes aus Array holen
+        const encryptedFile: EncryptedFile = {
+            encryptedData: arrayBufferToBase64(new Uint8Array(json.file).buffer),
+            iv: json.file_iv,
+            fileName: filename,
+            fileType: "application/octet-stream", // Backend liefert das nicht
+            fileSize: json.file.length
+        };
+
+        // 2. WrappedKey-Objekt aus Backend mappen
+        const wrappedData = JSON.stringify({
+            wrappedKey: json.wrapped_key,
+            iv: json.iv
+        });
+
+        console.log("Sender Public Key importieren")
+        // 3. Sender Public Key importieren
+        const senderPublicKey = await crypto.subtle.importKey(
             "raw",
-            base64ToArrayBuffer(public_key),
+            base64ToArrayBuffer(json.wrapped_key.public_key),
             { name: "ECDH", namedCurve: "P-256" },
             true,
             []
         );
-        const userKeys = await loadFromIndexedDB(authStore.user?.id + "")
-        const url = window.URL.createObjectURL(decryptFileAsUser(blob, authStore.user?.id + "", userKeys?.privateKey, publicKeyCrypto))
-        const link = document.createElement("a")
-        link.href = url
-        link.setAttribute("download", filename)
-        document.body.appendChild(link)
-        link.click()
-        link.parentNode?.removeChild(link)
-        window.URL.revokeObjectURL(url)
+
+        // 4. Eigene Keys laden
+        const userKeys = await loadFromIndexedDB(authStore.user!.id + "");
+        if (!userKeys) throw new Error("Keine UserKeys gefunden!");
+
+        // 5. Datei entschlüsseln
+        const decryptedFile = await decryptFileAsUser(
+            { encryptedFile, wrappedKeys: new Map([[authStore.user!.id + "", wrappedData]]) },
+            userKeys.privateKey,
+            senderPublicKey,
+            wrappedData,
+            encryptedFile.iv
+        );
+
+        // 6. Download starten
+        const url = URL.createObjectURL(decryptedFile);
+        const link = document.createElement("a");
+        link.href = url;
+        link.setAttribute("download", filename);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+
     } catch (e: any) {
-        alert(e.message ?? "Download fehlgeschlagen")
+        alert(e.message ?? "Download fehlgeschlagen");
+        console.error("Download Error:", e);
     }
 }
 
