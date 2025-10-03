@@ -1,5 +1,4 @@
 use axum::{
-    body::Bytes,
     extract::{ws::Message, Multipart, Path, Query, State},
     http::StatusCode,
     response::Json,
@@ -114,14 +113,7 @@ struct NewWrappedKey {
     wrapped_key: String,
     public_key: String,
 }
-#[derive(Debug, Deserialize)]
-struct WrappedKeyValue {
-    #[serde(rename = "wrappedKey")]
-    wrapped_key: String,
-    iv: String,
-}
-
-#[derive(Queryable, Selectable, Debug, Serialize)]
+#[derive(Debug, Deserialize, Queryable, Selectable, Serialize)]
 #[diesel(table_name = wrapped_keys)]
 pub struct WrappedKey {
     pub id: i32,
@@ -219,11 +211,7 @@ pub async fn upload(
             let file_record: File = diesel::insert_into(files::table)
                 .values(&new_file)
                 .get_result(&mut conn)
-                .map_err(|e| {
-                    eprintln!("Database error: {:?}", e);
-                    StatusCode::INTERNAL_SERVER_ERROR
-                })?;
-            println!("safe in db");
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             // Wrapped Keys speichern
             for (recipient_user_id, wrapped_key_json) in encrypted_file.wrapped_keys {
                 // JSON parsen
@@ -238,10 +226,7 @@ pub async fn upload(
                 diesel::insert_into(wrapped_keys::table)
                     .values(&new_wrapped_key)
                     .execute(&mut conn)
-                    .map_err(|e| {
-                        eprintln!("Database error inserting wrapped key: {:?}", e);
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    })?;
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             }
 
             responses.push(UploadResponse {

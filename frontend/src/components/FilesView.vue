@@ -68,9 +68,10 @@
 </template>
 
 <script setup lang="ts">
-import { arrayBufferToBase64, base64ToArrayBuffer, decryptFileAsUser, loadFromIndexedDB, useAuthStore } from "@/stores/auth"
+import { useAuthStore } from "@/stores/auth"
 import { apiRequest } from "@/api"
 import { ref, onMounted, computed } from "vue"
+import { arrayBufferToBase64, base64ToArrayBuffer, decryptFileAsUser, EncryptedFile, loadFromIndexedDB } from "@/cryptoUtils"
 
 interface FileItem {
     id: number
@@ -129,7 +130,6 @@ async function fetchFiles() {
         files.value = data.files
     } catch (e: any) {
         error.value = e.message ?? "Unbekannter Fehler"
-        console.log(e)
     } finally {
         loading.value = false
     }
@@ -142,7 +142,6 @@ async function downloadFile(id: number, filename: string) {
         if (!res.ok) throw new Error("Fehler beim Download");
 
         const json: any = await res.json();
-        console.log("Download JSON:", json);
 
         // 1. File-Bytes aus Array holen
         const encryptedFile: EncryptedFile = {
@@ -159,7 +158,6 @@ async function downloadFile(id: number, filename: string) {
             iv: json.iv
         });
 
-        console.log("Sender Public Key importieren")
         // 3. Sender Public Key importieren
         const senderPublicKey = await crypto.subtle.importKey(
             "raw",
@@ -175,7 +173,7 @@ async function downloadFile(id: number, filename: string) {
 
         // 5. Datei entschlüsseln
         const decryptedFile = await decryptFileAsUser(
-            { encryptedFile, wrappedKeys: new Map([[authStore.user!.id + "", wrappedData]]) },
+            encryptedFile,
             userKeys.privateKey,
             senderPublicKey,
             wrappedData,
@@ -194,7 +192,6 @@ async function downloadFile(id: number, filename: string) {
 
     } catch (e: any) {
         alert(e.message ?? "Download fehlgeschlagen");
-        console.error("Download Error:", e);
     }
 }
 

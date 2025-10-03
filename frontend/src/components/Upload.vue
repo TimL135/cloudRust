@@ -63,7 +63,8 @@
 </template>
 
 <script setup lang="ts">
-import { arrayBufferToBase64, base64ToArrayBuffer, EncryptedFile, encryptFileForMultipleUsers, MultiRecipientEncryptedFile, useAuthStore } from "@/stores/auth";
+import { arrayBufferToBase64, base64ToArrayBuffer, encryptFileForMultipleUsers, MultiRecipientEncryptedFile, } from "@/cryptoUtils";
+import { useAuthStore } from "@/stores/auth";
 import { ref } from "vue";
 
 interface UploadFile {
@@ -106,10 +107,8 @@ const addFiles = async (list: File[]) => {
         )
     }]
     list.forEach(async (f) => {
-        console.log("f")
         let encryptedFile = await encryptFileForMultipleUsers(f, keyPair.privateKey, userArray)
-        console.log(mapToObject(encryptedFile.wrappedKeys))
-        encryptedFile.wrappedKeys = mapToObject(encryptedFile.wrappedKeys)
+        encryptedFile.wrappedKeys = mapToObject(encryptedFile.wrappedKeys) as any
         const file: UploadFile = {
             sender_public_key: publicKeyBase64,
             file: encryptedFile,
@@ -135,8 +134,6 @@ const uploadFiles = async () => {
     // FormData zusammenbauen
     const formData = new FormData()
     for (const file of files.value) {
-        console.log(file.file.wrappedKeys)
-        console.log(JSON.stringify(file.file))
         formData.append("file", JSON.stringify({
             ...file.file,
             wrappedKeys: file.file.wrappedKeys
