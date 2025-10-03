@@ -50,10 +50,12 @@ async function saveToIndexedDB(id: string, privateKey: CryptoKey, publicKey: str
 }
 
 // Laden aus IndexedDB
-export async function loadFromIndexedDB(id: string): Promise<{ privateKey: CryptoKey, publicKey: CryptoKey } | null> {
+export async function loadFromIndexedDB(id: string, encryptedPrivateKey: string, public_key: string, password?: string): Promise<{ privateKey: CryptoKey, publicKey: CryptoKey } | null> {
     const db = await openDB();
     const tx = db.transaction(KEY_STORE, "readonly");
     const req = tx.objectStore(KEY_STORE).get(id);
+
+
 
     return new Promise(async (resolve) => {
         req.onsuccess = async () => {
@@ -62,20 +64,27 @@ export async function loadFromIndexedDB(id: string): Promise<{ privateKey: Crypt
                 resolve(null);
                 return;
             }
-
+            let private_key
+            if (!data.publicKey || !data.private_key) {
+                if (password) {
+                    console.log("⚠️ Private Key nicht in IndexedDB → Entschlüsselung mit Passwort");
+                    private_key = await decryptPrivateKeyWithPassword(encryptedPrivateKey, password)
+                    await saveToIndexedDB(id, private_key, public_key)
+                }
+            }
             // Falls publicKey als Base64 String gespeichert ist
             if (typeof data.publicKey === 'string') {
                 const publicKeyCrypto = await crypto.subtle.importKey(
                     "raw",
-                    base64ToArrayBuffer(data.publicKey),
+                    base64ToArrayBuffer(data.publicKey || public_key),
                     { name: "ECDH", namedCurve: "P-256" },
                     true,
                     []
                 );
-                resolve({ privateKey: data.privateKey, publicKey: publicKeyCrypto });
+                resolve({ privateKey: data.privateKey || private_key, publicKey: publicKeyCrypto });
             } else {
                 // Falls schon als CryptoKey gespeichert
-                resolve({ privateKey: data.privateKey, publicKey: data.publicKey });
+                resolve({ privateKey: data.privateKey || private_key, publicKey: data.publicKey });
             }
         };
         req.onerror = () => resolve(null);

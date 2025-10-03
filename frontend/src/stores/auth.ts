@@ -48,6 +48,7 @@ export const useAuthStore = defineStore("auth", {
         if (!this.user) throw new Error("Login Fehler")
         if (this.user.public_key == "_public_key") {
           const { publicKey, encryptedPrivateKey } = await createHybridKeyPair(this.user.id + "", password)
+          this.user.public_key = publicKey
           await fetch("/api/auth/update_keys", {
             method: "POST",
             headers: { "Content-Type": "application/json" },

@@ -142,6 +142,8 @@ async function downloadFile(id: number, filename: string) {
         if (!res.ok) throw new Error("Fehler beim Download");
 
         const json: any = await res.json();
+        const user = authStore.user
+        if (!user) throw new Error("Kein User");
 
         // 1. File-Bytes aus Array holen
         const encryptedFile: EncryptedFile = {
@@ -168,7 +170,7 @@ async function downloadFile(id: number, filename: string) {
         );
 
         // 4. Eigene Keys laden
-        const userKeys = await loadFromIndexedDB(authStore.user!.id + "");
+        const userKeys = await loadFromIndexedDB(user.id + "", user.encrypted_private_key, user.public_key);
         if (!userKeys) throw new Error("Keine UserKeys gefunden!");
 
         // 5. Datei entschlüsseln
